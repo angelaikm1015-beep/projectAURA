@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your profile · AURA</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <main class="auth-card">
+    <header class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+      </span>
+      <h1 class="brand__name">AURA</h1>
+      <p class="brand__tagline" id="greeting">Loading your profile…</p>
+    </header>
+
+    <p class="form-message" id="form-message" role="alert" aria-live="polite"></p>
+
+    <ul class="profile-list" id="profile"></ul>
+
+    <button type="button" class="btn btn-ghost" id="logout-btn">Log out</button>
+  </main>
+
+  <script type="module" src="js/welcome.js"></script>
+</body>
+</html>

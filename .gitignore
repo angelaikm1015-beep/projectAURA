@@ -1,0 +1,26 @@
+# Secrets — never commit these.
+# Service-account keys get downloaded under whatever name Firebase gives them
+# (projectaura-xxxx.json, etc.), so ignore every JSON under backend/ rather than
+# trying to guess the filename. Nothing in backend/ is meant to be committed JSON.
+backend/.env
+backend/*.json
+*serviceAccount*.json
+
+# Note: frontend/js/firebase-config.js is intentionally NOT ignored. The Firebase
+# web config is public by design — access is controlled by Auth + firestore.rules.
+
+# Node / Vite
+node_modules/
+frontend/dist/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

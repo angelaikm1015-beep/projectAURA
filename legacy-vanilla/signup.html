@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign up · AURA</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <main class="auth-card wide">
+    <header class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+      </span>
+      <h1 class="brand__name">AURA</h1>
+      <p class="brand__tagline">Create your account and tell us how you play.</p>
+    </header>
+
+    <form class="form" id="signup-form" novalidate>
+      <p class="form-message" id="form-message" role="alert" aria-live="polite"></p>
+
+      <p class="section-title">Account</p>
+
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" autocomplete="email"
+               placeholder="you@example.com" aria-describedby="email-error email-hint" required />
+        <p class="hint" id="email-hint">This is also your username.</p>
+        <p class="error" id="email-error"></p>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="password-wrap">
+            <input type="password" id="password" name="password" autocomplete="new-password"
+                   placeholder="At least 8 characters" aria-describedby="password-error" required />
+            <button type="button" class="toggle-password" data-target="password"
+                    aria-label="Show password" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+          <div class="strength" id="strength" hidden>
+            <div class="strength__bars" aria-hidden="true">
+              <span class="strength__bar"></span><span class="strength__bar"></span>
+              <span class="strength__bar"></span><span class="strength__bar"></span>
+            </div>
+            <span class="strength__label" id="strength-label"></span>
+          </div>
+          <p class="error" id="password-error"></p>
+        </div>
+
+        <div class="field">
+          <label for="confirm">Re-enter password</label>
+          <div class="password-wrap">
+            <input type="password" id="confirm" name="confirm" autocomplete="new-password"
+                   placeholder="Type it once more" aria-describedby="confirm-error" required />
+            <button type="button" class="toggle-password" data-target="confirm"
+                    aria-label="Show password" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+          <p class="error" id="confirm-error"></p>
+        </div>
+      </div>
+
+      <p class="section-title">About you</p>
+
+      <div class="row">
+        <div class="field">
+          <label for="birthdate">Date of birth</label>
+          <input type="date" id="birthdate" name="birthdate"
+                 aria-describedby="birthdate-error age-hint" required />
+          <p class="hint" id="age-hint"></p>
+          <p class="error" id="birthdate-error"></p>
+        </div>
+
+        <div class="field">
+          <label for="gender">Gender</label>
+          <select id="gender" name="gender" aria-describedby="gender-error" required></select>
+          <p class="error" id="gender-error"></p>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="nationality">Nationality</label>
+        <select id="nationality" name="nationality" aria-describedby="nationality-error" required></select>
+        <p class="error" id="nationality-error"></p>
+      </div>
+
+      <p class="section-title">Your music</p>
+
+      <div class="field">
+        <label for="affiliation">Where do you play?</label>
+        <select id="affiliation" name="affiliation" aria-describedby="affiliation-error" required></select>
+        <p class="error" id="affiliation-error"></p>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="instrument">Instrument</label>
+          <select id="instrument" name="instrument" aria-describedby="instrument-error" required></select>
+          <p class="error" id="instrument-error"></p>
+        </div>
+
+        <div class="field">
+          <label for="genre">Favorite genre</label>
+          <select id="genre" name="genre" aria-describedby="genre-error" required></select>
+          <p class="error" id="genre-error"></p>
+        </div>
+      </div>
+
+      <button type="submit" class="btn" id="submit-btn">Create account</button>
+    </form>
+
+    <p class="form-footer">Already have an account? <a class="link" href="index.html">Log in</a></p>
+  </main>
+
+  <script type="module" src="js/signup.js"></script>
+</body>
+</html>

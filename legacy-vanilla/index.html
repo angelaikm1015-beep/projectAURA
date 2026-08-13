@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Log in · AURA</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <main class="auth-card">
+    <header class="brand">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+      </span>
+      <h1 class="brand__name">AURA</h1>
+      <p class="brand__tagline">Welcome back — sign in to keep playing.</p>
+    </header>
+
+    <form class="form" id="login-form" novalidate>
+      <p class="form-message" id="form-message" role="alert" aria-live="polite"></p>
+
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" autocomplete="username"
+               placeholder="you@example.com" aria-describedby="email-error" required />
+        <p class="error" id="email-error"></p>
+      </div>
+
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="password-wrap">
+          <input type="password" id="password" name="password" autocomplete="current-password"
+                 placeholder="Your password" aria-describedby="password-error" required />
+          <button type="button" class="toggle-password" data-target="password"
+                  aria-label="Show password" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+        <p class="error" id="password-error"></p>
+      </div>
+
+      <div class="form-aside">
+        <label class="checkbox">
+          <input type="checkbox" id="remember" name="remember" />
+          <span>Keep me signed in</span>
+        </label>
+        <a class="link" href="#" id="forgot">Forgot password?</a>
+      </div>
+
+      <button type="submit" class="btn" id="submit-btn">Log in</button>
+    </form>
+
+    <p class="form-footer">New to AURA? <a class="link" href="signup.html">Create an account</a></p>
+  </main>
+
+  <script type="module" src="js/login.js"></script>
+</body>
+</html>

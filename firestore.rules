@@ -1,0 +1,18 @@
+rules_version = '2';
+
+// Profile documents are written only by the Flask backend, which uses the
+// Firebase Admin SDK and bypasses these rules. Clients get read access to their
+// own document and nothing else, so a compromised browser can't forge a profile.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
