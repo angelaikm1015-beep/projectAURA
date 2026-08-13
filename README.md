@@ -1,11 +1,16 @@
 # projectAURA
 
 A music community app. Signup and login run on **Firebase Auth + Firestore**,
-with a **Python/Flask** backend and a vanilla HTML/CSS/JS frontend (no build step).
+with a **Python/Flask** backend and a **React (Vite)** frontend.
 
 ```
 backend/          Flask API — validation, account creation, Firestore access
-frontend/         HTML/CSS/JS pages, served by Flask at /
+frontend/         React + Vite app
+  src/pages/      LoginPage, SignupPage, WelcomePage
+  src/components/ Form fields and page chrome
+  src/context/    AuthContext — one Firebase auth subscription for the app
+  src/lib/        firebase, api client, validation, generated options
+legacy-vanilla/   The pre-React pages, kept until React is confirmed working
 firestore.rules   Locks Firestore down to backend-only writes
 ```
 
@@ -45,20 +50,28 @@ python backend/app.py                     # http://localhost:5001
 > 5000 and will shadow the dev server. Change `PORT` in `backend/.env` if 5001
 > is taken too.
 
-**3. Frontend**
+**3. Frontend** (needs Node 18+)
 
-Paste your web config into [frontend/js/firebase-config.js](frontend/js/firebase-config.js),
-then open <http://localhost:5001> — Flask serves the pages, so there's no second
-server and no CORS to configure.
+```sh
+cd frontend
+npm install
+npm run dev          # http://localhost:5173, proxies /api to Flask on :5001
+```
 
-> **Open the pages over http, never by double-clicking the .html file.** The
-> frontend uses ES modules, and browsers block those over `file://` — the page
-> loads but no JavaScript runs at all, so the dropdowns stay empty, validation
-> never fires, and nothing submits.
+Run Flask in one terminal and `npm run dev` in another. Vite proxies `/api` to
+Flask, so the browser sees one origin and there's no CORS to configure.
 
-To serve the frontend separately instead (Live Server, Vite, …), set `API_BASE`
-in that same file to `"http://localhost:5001"` and add your origin to
-`ALLOWED_ORIGINS` in `backend/.env`.
+The Firebase web config lives in
+[frontend/src/lib/firebase-config.js](frontend/src/lib/firebase-config.js) and is
+already filled in for `projectaura-8cf5f`. Those values are public by design —
+Auth and `firestore.rules` are what protect the data.
+
+**Serving it from Flask instead** (one server, e.g. for deployment):
+
+```sh
+cd frontend && npm run build     # emits frontend/dist
+python backend/app.py            # http://localhost:5001 serves it
+```
 
 **4. Deploy the rules**
 
@@ -81,11 +94,20 @@ which the frontend renders under the matching input.
 
 ## Pages
 
-| File | Purpose |
-| --- | --- |
-| [frontend/index.html](frontend/index.html) | Log in, "keep me signed in", password reset email |
-| [frontend/signup.html](frontend/signup.html) | Create an account |
-| [frontend/welcome.html](frontend/welcome.html) | Profile summary from `/api/me`, log out |
+Client-side routes, via react-router. Flask falls back to the SPA for any
+non-`/api` path, so deep links and refreshes work.
+
+| Route | Component | Purpose |
+| --- | --- | --- |
+| `/login` | [LoginPage.jsx](frontend/src/pages/LoginPage.jsx) | Log in, "keep me signed in", password reset email |
+| `/signup` | [SignupPage.jsx](frontend/src/pages/SignupPage.jsx) | Create an account |
+| `/welcome` | [WelcomePage.jsx](frontend/src/pages/WelcomePage.jsx) | Profile summary from `/api/me`, log out |
+
+[AuthContext](frontend/src/context/AuthContext.jsx) holds the single
+`onAuthStateChanged` subscription. It exposes an `initializing` flag, and
+[App.jsx](frontend/src/App.jsx) waits for it before routing — Firebase restores a
+persisted session asynchronously, so routing on the initial `null` user would
+bounce a signed-in user to `/login` on every refresh.
 
 ### Signup fields
 
@@ -102,9 +124,9 @@ which the frontend renders under the matching input.
 
 [backend/options.py](backend/options.py) is the single source of truth — the
 server validates every submitted value against it. A generated copy is bundled
-into [frontend/js/options-data.js](frontend/js/options-data.js) so the form
-renders instantly and still works when the API is unreachable; `signup.js` then
-refreshes from `/api/options`, so a running server always wins.
+into [frontend/src/lib/options-data.js](frontend/src/lib/options-data.js) so the
+form renders instantly and still works when the API is unreachable; `SignupPage`
+then refreshes from `/api/options`, so a running server always wins.
 
 After editing `options.py`:
 
@@ -135,7 +157,8 @@ python backend/generate_options.py
 ## Tests
 
 ```sh
-python backend/smoke_test.py
+python backend/smoke_test.py          # backend, no credentials needed
+python check_frontend_imports.py      # React imports resolve (stopgap, no Node here)
 ```
 
 Boots the app with Firebase stubbed out — no credentials or network needed — and

@@ -71,7 +71,7 @@ for path in files:
     for m in IMPORT_RE.finditer(text):
         spec = m.group("path")
         clause = m.group("clause")
-        rel = path.relative_to(Path("frontend"))
+        rel = path.relative_to(ROOT)
 
         if spec.startswith("."):
             target = resolve(path, spec)
@@ -99,13 +99,13 @@ for path in files:
 for path in files:
     for spec in re.findall(r'import\s+["\'](\.[^"\']+\.css)["\']', path.read_text()):
         if not (path.parent / spec).resolve().is_file():
-            problems.append(f"{path.relative_to(Path('frontend'))}: missing CSS '{spec}'")
+            problems.append(f"{path.relative_to(ROOT)}: missing CSS '{spec}'")
 
 # The Vite entry must exist and be referenced by index.html.
-html = Path("frontend/index.html").read_text()
+html = (ROOT / "frontend" / "index.html").read_text()
 if "/src/main.jsx" not in html:
     problems.append("frontend/index.html does not reference /src/main.jsx")
-if not Path("frontend/src/main.jsx").is_file():
+if not (ROOT / "frontend" / "src" / "main.jsx").is_file():
     problems.append("frontend/src/main.jsx is missing")
 if 'id="root"' not in html:
     problems.append("frontend/index.html has no #root element")
