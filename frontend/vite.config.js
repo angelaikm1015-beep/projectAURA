@@ -16,6 +16,11 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:5001",
         changeOrigin: true,
+        // Generating a score takes the model a minute or two, and a score that
+        // needs correcting costs a second round on top. The proxy's default
+        // timeout would cut the request off long before Flask answers.
+        timeout: 600000,
+        proxyTimeout: 600000,
       },
     },
   },

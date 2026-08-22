@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "abcjs": "^6.4.4",
     "firebase": "^11.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

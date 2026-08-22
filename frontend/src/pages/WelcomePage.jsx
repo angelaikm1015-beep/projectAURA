@@ -1,7 +1,7 @@
 /* Post-login page — reads the profile from Firestore through the Flask API. */
 
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { AuthCard, BrandHeader, FormMessage } from "../components/chrome";
 import { useAuth } from "../context/AuthContext";
@@ -58,6 +58,10 @@ export default function WelcomePage() {
           </li>
         ))}
       </ul>
+
+      <Link className="btn" to="/compose">
+        Create sheet music
+      </Link>
 
       <button type="button" className="btn btn-ghost" onClick={handleLogout}>
         Log out

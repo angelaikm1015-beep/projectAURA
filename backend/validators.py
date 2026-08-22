@@ -134,3 +134,73 @@ def build_profile(data: dict, email: str) -> dict:
 
 def _compact(errors: dict) -> dict:
     return {field: message for field, message in errors.items() if message}
+
+
+# ---------------------------------------------------------------------------
+# Composition requests
+# ---------------------------------------------------------------------------
+
+MAX_NOTES_LENGTH = 500
+
+
+def validate_instruments(value) -> str | None:
+    """Check the ``[{name, parts}, ...]`` roster from the compose form.
+
+    The part count is the "Violin 1, 2, 3" case: one instrument, several
+    independent lines. Each instrument caps its own division (a drum set can't
+    be split four ways) and the whole score caps total parts, because every
+    extra part is another full staff the model has to keep aligned.
+    """
+    if not isinstance(value, list) or not value:
+        return "Pick at least one instrument."
+
+    total = 0
+    seen = set()
+    for entry in value:
+        if not isinstance(entry, dict):
+            return "Choose one of the listed instruments."
+
+        name = entry.get("name")
+        spec = options.INSTRUMENT_SPECS.get(name)
+        if spec is None:
+            return "Choose one of the listed instruments."
+        if name in seen:
+            return f"{name} is listed twice — set the number of parts instead."
+        seen.add(name)
+
+        parts = entry.get("parts", 1)
+        if not isinstance(parts, int) or isinstance(parts, bool) or parts < 1:
+            return f"How many {name} parts? Choose at least 1."
+        if parts > spec["maxParts"]:
+            return f"{name} can be split into at most {spec['maxParts']} part(s)."
+        total += parts
+
+    if total > options.MAX_TOTAL_PARTS:
+        return (f"That's {total} parts — {options.MAX_TOTAL_PARTS} is the most "
+                "we can write in one piece.")
+    return None
+
+
+def validate_composition(data: dict) -> dict:
+    """Validate a compose request. Empty dict means it's ready for the model."""
+    notes = data.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        notes_error = "Extra notes must be text."
+    elif notes and len(notes) > MAX_NOTES_LENGTH:
+        notes_error = f"Keep extra notes under {MAX_NOTES_LENGTH} characters."
+    else:
+        notes_error = None
+
+    return _compact({
+        "instruments": validate_instruments(data.get("instruments")),
+        "ensembleGroup": _validate_choice(
+            data.get("ensembleGroup"), options.ENSEMBLE_GROUP_VALUES,
+            "Select who is playing."),
+        "level": _validate_choice(
+            data.get("level"), options.LEVEL_VALUES, "Select a playing level."),
+        "mood": _validate_choice(
+            data.get("mood"), options.MOOD_VALUES, "Select a mood."),
+        "conductor": None if isinstance(data.get("conductor"), bool)
+                     else "Say whether there's a conductor.",
+        "notes": notes_error,
+    })

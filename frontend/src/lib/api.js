@@ -56,3 +56,10 @@ export const fetchMe = () => request("/api/me", { authenticated: true });
 /** Patch profile fields (not email/password — those go through Firebase Auth). */
 export const updateMe = (updates) =>
   request("/api/me", { method: "PATCH", body: updates, authenticated: true });
+
+/**
+ * Generate a score. Slow by nature — the model is writing every part — so this
+ * one deliberately has no client-side timeout beyond the browser's own.
+ */
+export const compose = (payload) =>
+  request("/api/compose", { method: "POST", body: payload, authenticated: true });

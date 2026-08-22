@@ -324,5 +324,515 @@ export const OPTIONS = {
     "Yemen",
     "Zambia",
     "Zimbabwe"
-  ]
+  ],
+  "scoreInstruments": [
+    {
+      "group": "Strings",
+      "options": [
+        "Violin",
+        "Viola",
+        "Cello",
+        "Double bass",
+        "Harp",
+        "Acoustic guitar",
+        "Electric guitar",
+        "Bass guitar",
+        "Ukulele"
+      ]
+    },
+    {
+      "group": "Woodwinds",
+      "options": [
+        "Flute",
+        "Piccolo",
+        "Clarinet",
+        "Bass clarinet",
+        "Oboe",
+        "English horn",
+        "Bassoon",
+        "Alto saxophone",
+        "Tenor saxophone",
+        "Baritone saxophone",
+        "Recorder"
+      ]
+    },
+    {
+      "group": "Brass",
+      "options": [
+        "Trumpet",
+        "French horn",
+        "Trombone",
+        "Euphonium",
+        "Tuba"
+      ]
+    },
+    {
+      "group": "Percussion",
+      "options": [
+        "Timpani",
+        "Marimba",
+        "Xylophone",
+        "Vibraphone",
+        "Snare drum",
+        "Drum set",
+        "Hand percussion"
+      ]
+    },
+    {
+      "group": "Keyboard",
+      "options": [
+        "Piano",
+        "Organ",
+        "Harpsichord",
+        "Synthesizer",
+        "Accordion"
+      ]
+    },
+    {
+      "group": "Voice",
+      "options": [
+        "Soprano",
+        "Alto (voice)",
+        "Tenor (voice)",
+        "Bass (voice)"
+      ]
+    }
+  ],
+  "ensembleGroups": [
+    {
+      "value": "elementary-school",
+      "label": "Elementary school",
+      "guidance": "Very short rehearsal attention span. Unison or two parts at most, constant doubling, nothing faster than eighth notes."
+    },
+    {
+      "value": "middle-school",
+      "label": "Middle school",
+      "guidance": "Roughly 2-4 rehearsals. Keep every part playable at sight after one read-through; double exposed lines so no one is left alone."
+    },
+    {
+      "value": "high-school",
+      "label": "High school",
+      "guidance": "Can handle real independence between parts and a short exposed solo, but keep page turns and endurance in mind."
+    },
+    {
+      "value": "college",
+      "label": "College / University",
+      "guidance": "Rehearses efficiently and reads well. Counterpoint, meter changes and extended technique are all fair game."
+    },
+    {
+      "value": "community",
+      "label": "Community / amateur ensemble",
+      "guidance": "Wide spread of ability inside one group. Write a secure, doubled core and put the difficulty in optional divisi rather than in everyone's part."
+    },
+    {
+      "value": "hobby",
+      "label": "Friends playing for fun (hobby)",
+      "guidance": "No conductor culture and little rehearsal. Favour a memorable tune, clear repeats, and parts that lock in by ear."
+    },
+    {
+      "value": "professional",
+      "label": "Professional ensemble",
+      "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically and without hand-holding."
+    }
+  ],
+  "levels": [
+    {
+      "value": "beginner",
+      "label": "Beginner",
+      "years": "5 months – 1 year",
+      "guidance": "Keys of C, G, F or D major only. Time in 4/4, 3/4 or 2/4 at a steady tempo. Whole, half, quarter and eighth notes only — no syncopation, no dotted-eighth rhythms, no ties across barlines. Stay inside the easy range at all times. Stepwise motion with leaps no wider than a fifth. Strings stay in first position; winds stay in the first octave they learn. Rests of a full bar or more so players can find their place. Two dynamic levels at most."
+    },
+    {
+      "value": "intermediate",
+      "label": "Intermediate",
+      "years": "2 – 3 years",
+      "guidance": "Up to three sharps or flats. Sixteenth-note passages at moderate tempo, dotted rhythms, simple syncopation and ties. Mostly the easy range with brief excursions above it. Leaps up to an octave. Strings may use third position; winds may cross the break. Slurs, staccato and a full dynamic range from p to f."
+    },
+    {
+      "value": "higher-intermediate",
+      "label": "Higher intermediate",
+      "years": "3 – 6 years",
+      "guidance": "Any key up to five accidentals, modal writing, occasional meter changes and triplets against duple. Full written range. Independent counterpoint rather than block doubling. Accents, tenuto, hairpins, double stops for strings, and short exposed solo lines."
+    },
+    {
+      "value": "pro",
+      "label": "Pro",
+      "years": "7 – 10 years",
+      "guidance": "No restrictions. Chromaticism, mixed meter, rubato, virtuosic runs, extremes of range and dynamic, and genuinely independent voices. Write as you would for paid players."
+    }
+  ],
+  "moods": [
+    {
+      "value": "happy",
+      "label": "Happy",
+      "guidance": "Bright major key, brisk lilting tempo, light detached articulation, rising melodic contours."
+    },
+    {
+      "value": "joyful",
+      "label": "Joyful / celebratory",
+      "guidance": "Major key, fanfare gestures, full textures, driving rhythm, accents on strong beats."
+    },
+    {
+      "value": "playful",
+      "label": "Playful",
+      "guidance": "Staccato, unexpected rests and hiccups, call-and-response between parts, sudden dynamic drops."
+    },
+    {
+      "value": "peaceful",
+      "label": "Peaceful / calm",
+      "guidance": "Slow tempo, long slurred lines, sustained harmony, narrow dynamic range, gentle suspensions."
+    },
+    {
+      "value": "hopeful",
+      "label": "Hopeful",
+      "guidance": "Starts sparse and low, gradually adds parts and rises in register; suspensions resolving upward."
+    },
+    {
+      "value": "nostalgic",
+      "label": "Nostalgic",
+      "guidance": "Moderate tempo, warm middle register, a simple tune that returns changed, gentle chromatic colouring."
+    },
+    {
+      "value": "romantic",
+      "label": "Romantic / tender",
+      "guidance": "Singing melody over flowing accompaniment, rubato, expressive appoggiaturas, rich seventh chords."
+    },
+    {
+      "value": "sad",
+      "label": "Sad",
+      "guidance": "Minor key, slow tempo, descending lines, sighing two-note slurs, sparse texture, soft dynamics."
+    },
+    {
+      "value": "longing",
+      "label": "Longing / yearning",
+      "guidance": "Minor or modal, phrases that reach up and fall back, unresolved harmony, wide expressive leaps."
+    },
+    {
+      "value": "mysterious",
+      "label": "Mysterious",
+      "guidance": "Whole-tone or modal colour, quiet sustained low notes, ambiguous harmony, unpredictable phrase lengths."
+    },
+    {
+      "value": "tense",
+      "label": "Tense / suspenseful",
+      "guidance": "Repeated ostinato, dissonant held chords, tremolo, crescendo that never resolves, irregular accents."
+    },
+    {
+      "value": "angry",
+      "label": "Angry",
+      "guidance": "Minor key, fast and forceful, heavy accents, sharp dissonance, driving repeated rhythms, loud dynamics, abrupt cut-offs."
+    },
+    {
+      "value": "dark",
+      "label": "Dark / ominous",
+      "guidance": "Low register, minor mode, slow tread, chromatic descent, half-step motion in the bass."
+    },
+    {
+      "value": "epic",
+      "label": "Epic / heroic",
+      "guidance": "Broad tempo, brass-led fanfares, wide leaps, pedal tones, big unison statements of the theme."
+    },
+    {
+      "value": "dreamy",
+      "label": "Dreamy",
+      "guidance": "Floating harmony, soft dynamics, arpeggiated accompaniment, blurred cadences, upper register."
+    },
+    {
+      "value": "energetic",
+      "label": "Energetic / driving",
+      "guidance": "Fast tempo, relentless rhythmic pulse, syncopation, short punchy motifs traded between parts."
+    }
+  ],
+  "instrumentInfo": {
+    "Violin": {
+      "clef": "treble",
+      "maxParts": 4,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Viola": {
+      "clef": "alto",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Cello": {
+      "clef": "bass",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Double bass": {
+      "clef": "bass",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -12
+    },
+    "Harp": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Acoustic guitar": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -12
+    },
+    "Electric guitar": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -12
+    },
+    "Bass guitar": {
+      "clef": "bass",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -12
+    },
+    "Ukulele": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Flute": {
+      "clef": "treble",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Piccolo": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 12
+    },
+    "Clarinet": {
+      "clef": "treble",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -2
+    },
+    "Bass clarinet": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -14
+    },
+    "Oboe": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "English horn": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -7
+    },
+    "Bassoon": {
+      "clef": "bass",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Alto saxophone": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -9
+    },
+    "Tenor saxophone": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -14
+    },
+    "Baritone saxophone": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -21
+    },
+    "Recorder": {
+      "clef": "treble",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 12
+    },
+    "Trumpet": {
+      "clef": "treble",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -2
+    },
+    "French horn": {
+      "clef": "treble",
+      "maxParts": 4,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -7
+    },
+    "Trombone": {
+      "clef": "bass",
+      "maxParts": 3,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Euphonium": {
+      "clef": "bass",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Tuba": {
+      "clef": "bass",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Timpani": {
+      "clef": "bass",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Marimba": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Xylophone": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 12
+    },
+    "Vibraphone": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Snare drum": {
+      "clef": "perc",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": false,
+      "transpose": 0
+    },
+    "Drum set": {
+      "clef": "perc",
+      "maxParts": 1,
+      "staves": 1,
+      "pitched": false,
+      "transpose": 0
+    },
+    "Hand percussion": {
+      "clef": "perc",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": false,
+      "transpose": 0
+    },
+    "Piano": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Organ": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Harpsichord": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Synthesizer": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Accordion": {
+      "clef": "treble",
+      "maxParts": 1,
+      "staves": 2,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Soprano": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Alto (voice)": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    },
+    "Tenor (voice)": {
+      "clef": "treble",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": -12
+    },
+    "Bass (voice)": {
+      "clef": "bass",
+      "maxParts": 2,
+      "staves": 1,
+      "pitched": true,
+      "transpose": 0
+    }
+  },
+  "limits": {
+    "maxTotalParts": 12
+  }
 };

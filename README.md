@@ -1,12 +1,16 @@
 # projectAURA
 
-A music community app. Signup and login run on **Firebase Auth + Firestore**,
-with a **Python/Flask** backend and a **React (Vite)** frontend.
+A music community app that writes sheet music. Signup and login run on
+**Firebase Auth + Firestore**, score generation runs on the **OpenAI API**, with
+a **Python/Flask** backend and a **React (Vite)** frontend.
 
 ```
 backend/          Flask API — validation, account creation, Firestore access
+  composer.py     Score generation: briefs the model, assembles the notation
+  abc_check.py    Reads the returned notation back and checks the arithmetic
+  options.py      Every dropdown list, plus per-instrument clefs and ranges
 frontend/         React + Vite app
-  src/pages/      LoginPage, SignupPage, WelcomePage
+  src/pages/      LoginPage, SignupPage, WelcomePage, ComposePage
   src/components/ Form fields and page chrome
   src/context/    AuthContext — one Firebase auth subscription for the app
   src/lib/        firebase, api client, validation, generated options
@@ -46,6 +50,12 @@ cp backend/.env.example backend/.env      # then fill it in
 python backend/app.py                     # http://localhost:5001
 ```
 
+`backend/.env` needs an `OPENAI_API_KEY` as well as the Firebase settings, or
+`/compose` will return a 503 telling you so. Get one from
+[platform.openai.com/api-keys](https://platform.openai.com/api-keys); the account
+needs billing enabled. `OPENAI_MODEL` defaults to `gpt-5.5` and can be any model
+that supports Structured Outputs — see [Choosing a model](#choosing-a-model).
+
 > Port 5001, not 5000 — on macOS, Control Center's AirPlay Receiver listens on
 > 5000 and will shadow the dev server. Change `PORT` in `backend/.env` if 5001
 > is taken too.
@@ -84,10 +94,11 @@ firebase deploy --only firestore:rules
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | — | Liveness check |
-| `GET` | `/api/options` | — | Dropdown contents for the signup form |
+| `GET` | `/api/options` | — | Dropdown contents for the signup and compose forms |
 | `POST` | `/api/signup` | — | Validate, create the Auth user, write the profile |
 | `GET` | `/api/me` | Bearer | The signed-in user's profile |
 | `PATCH` | `/api/me` | Bearer | Update profile fields (not email/password) |
+| `POST` | `/api/compose` | Bearer | Generate a score. Slow — 30–120s — and it spends money, hence the auth. |
 
 Validation failures come back as `400` with `{"message": ..., "errors": {"<field>": "<message>"}}`,
 which the frontend renders under the matching input.
@@ -102,6 +113,7 @@ non-`/api` path, so deep links and refreshes work.
 | `/login` | [LoginPage.jsx](frontend/src/pages/LoginPage.jsx) | Log in, "keep me signed in", password reset email |
 | `/signup` | [SignupPage.jsx](frontend/src/pages/SignupPage.jsx) | Create an account |
 | `/welcome` | [WelcomePage.jsx](frontend/src/pages/WelcomePage.jsx) | Profile summary from `/api/me`, log out |
+| `/compose` | [ComposePage.jsx](frontend/src/pages/ComposePage.jsx) | Describe the ensemble, generate and print the sheet music |
 
 [AuthContext](frontend/src/context/AuthContext.jsx) holds the single
 `onAuthStateChanged` subscription. It exposes an `initializing` flag, and
@@ -122,8 +134,8 @@ bounce a signed-in user to `/login` on every refresh.
 
 ### Where the dropdown contents live
 
-[backend/options.py](backend/options.py) is the single source of truth — the
-server validates every submitted value against it. A generated copy is bundled
+[backend/options.py](backend/options.py) is the single source of truth for both
+forms — the server validates every submitted value against it. A generated copy is bundled
 into [frontend/src/lib/options-data.js](frontend/src/lib/options-data.js) so the
 form renders instantly and still works when the API is unreachable; `SignupPage`
 then refreshes from `/api/options`, so a running server always wins.
@@ -135,6 +147,102 @@ python backend/generate_options.py
 ```
 
 `smoke_test.py` fails if you forget, so the two can't silently drift.
+
+## How the sheet music gets made
+
+There is no OpenAI endpoint that returns sheet music, so
+[backend/composer.py](backend/composer.py) does it in two halves.
+
+**The model writes notes.** One chat completion with **Structured Outputs**
+(`json_schema`, `strict: true`) returns a single JSON object: the shared score
+metadata, plus a block of **ABC notation** per part. ABC rather than MusicXML —
+MusicXML is far too verbose for a model to keep correct across a dozen staves,
+while ABC is compact enough that the model has attention left for the music.
+
+**Python builds the score.** Headers, voice declarations, staff grouping, clefs,
+per-part key signatures and MIDI programs are assembled deterministically in
+`assemble_abc()`. The model is told never to write a header field, so it *cannot*
+put half the ensemble in 4/4 and the other half in 3/4, or forget a clef.
+
+Then [score-view.jsx](frontend/src/components/score-view.jsx) engraves that ABC
+into real SVG staves with **abcjs**, in the browser. So the user gets actual
+notation — reflowing, printable at full resolution, and playable through the Web
+Audio API to hear the piece before rehearsal.
+
+### What makes the parts playable
+
+The brief sent to the model is built from
+[`INSTRUMENT_SPECS`](backend/options.py), which carries for every instrument its
+clef, its **transposition**, and two written ranges — one a beginner can rely on,
+one an advanced player can be asked for.
+
+That is what stops the usual failure modes. A B♭ trumpet part comes back written
+a major 2nd above concert pitch with its own key signature; a beginner flute part
+stays under G5; a cello reads bass clef and a viola reads alto; piano and harp get
+a braced grand staff; a snare drum gets a one-line rhythm staff on MIDI channel 10.
+
+Six answers become the brief:
+
+| Input | Effect on the music |
+| --- | --- |
+| **Instruments**, and how many of each | "Violin ×3" becomes Violin I, II and III — three *independent* lines, not one line tripled. Capped per instrument (a section divides, a drum set doesn't) and at 12 parts total. |
+| **Group** — middle school … professional | How much rehearsal time to assume, and how much doubling the parts need. |
+| **Level** — the four bands, by years played | Keys, rhythms, ranges, positions and technique. Writing above a group's level is the worst failure here, so this constrains hardest. |
+| **Mood** | The theme of the piece: it picks the key, tempo, register, articulation and harmony. |
+| **Conductor — yes** | The music may use tempo changes, fermatas and cued entries, and a **Conductor** tab is generated with an interpretation summary, tempo map, cues by measure and part, rehearsal marks, and beat-pattern guidance. |
+| **Conductor — no** | One steady tempo throughout, no rubato, and the cues players need to stay together written into the parts themselves. |
+
+### Nobody takes the model's word for it
+
+Models are fluent about music and unreliable at counting. On the first real run,
+`gpt-4o` returned a piece whose bars looked plausible and didn't add up:
+
+```
+Violin I bar 1 is 10 units long, needs 8
+Violin I bar 2 is 11 units long, needs 8
+... 34 defects across 3 parts
+```
+
+That is invisible in the JSON and obvious the moment anyone tries to play it. So
+[backend/abc_check.py](backend/abc_check.py) reads the returned notation and adds
+it up — every bar, in every part, in units of the unit note length. It handles
+the syntax that changes a duration (chords, tuplets, broken rhythm, pickups,
+repeats) and ignores the syntax that can't (slurs, ties, dynamics, accidentals).
+It also extracts pitches, so a part that strays outside the range that level of
+player can reach is caught the same way.
+
+When something is wrong, `composer.py` hands the model **its own defect list** —
+naming the part and the bar — and asks for a correction. One round only: it
+reliably clears arithmetic slips, and past that the model starts recomposing
+rather than correcting, at which point a fresh generation is the better answer.
+The repair is kept only if it actually reduced the defect count.
+
+Anything still broken ships **with a warning** rather than being presented as
+finished. The user gets the music and is told to check the alignment.
+
+### Choosing a model
+
+This matters more than anything else in the pipeline. Same prompt, same request:
+
+| Model | Result |
+| --- | --- |
+| `gpt-4o` | 34 malformed bars across 3 parts; needed the repair round |
+| `gpt-5.5` | Clean on the first pass — every bar correct, no repair needed |
+
+`gpt-5.5` is the default for that reason. `gpt-4o` is much cheaper and still
+works — the validator catches its mistakes and the repair round fixes most of
+them — but expect the extra round most of the time. Set `OPENAI_MODEL` to choose.
+
+Because the model is configurable and model families disagree about `max_tokens`
+and `temperature`, an unsupported parameter is detected from OpenAI's own 400,
+dropped or renamed, and the call retried — rather than surfacing as a failed
+generation.
+
+### Getting the music out
+
+Each tab downloads as `.abc` (opens in MuseScore) or MIDI (imports anywhere), and
+prints on its own — the print stylesheet drops the app chrome so the sheet comes
+out on white paper.
 
 ## Firestore document shape
 
@@ -162,7 +270,9 @@ python check_frontend_imports.py      # React imports resolve (stopgap, no Node 
 ```
 
 Boots the app with Firebase stubbed out — no credentials or network needed — and
-checks routing, validation, the auth guard, and the signup rollback path.
+checks routing, validation, the auth guard, the signup rollback path, and score
+generation with the model call mocked (including the divided-section expansion,
+grand-staff bracing, the ragged-measure warning, and the OpenAI failure modes).
 
 To verify against your **real** Firebase project, start the server and run:
 

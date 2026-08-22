@@ -22,6 +22,7 @@ from firebase_admin import firestore
 from google.api_core import exceptions as google_exceptions
 from werkzeug.exceptions import HTTPException
 
+import composer
 import options
 import validators
 from firebase import db, init_firebase, require_auth
@@ -149,6 +150,40 @@ def register_routes(app: Flask) -> None:
 
         doc_ref.update({**updates, "updatedAt": firestore.SERVER_TIMESTAMP})
         return jsonify({"uid": g.uid, "profile": _serialize(doc_ref.get())})
+
+    # ---------- score generation ----------
+
+    @app.post("/api/compose")
+    @require_auth
+    def compose():
+        """Generate a score from the compose form.
+
+        Authenticated because every call spends money at OpenAI, and slow by
+        nature — writing a dozen aligned parts takes the model a while, so the
+        client is expected to sit on this request rather than poll.
+        """
+        data = request.get_json(silent=True) or {}
+
+        errors = validators.validate_composition(data)
+        if errors:
+            return jsonify({"message": "Please fix the highlighted fields.",
+                            "errors": errors}), 400
+
+        try:
+            score = composer.compose(data)
+        except composer.ComposerError as error:
+            # These messages are written to be shown to the user as-is: a missing
+            # API key is a setup mistake and saying so beats a generic 500.
+            app.logger.warning("Compose failed: %s", error)
+            return jsonify({"message": str(error)}), error.status
+
+        return jsonify({"score": score, "request": {
+            "instruments": data["instruments"],
+            "ensembleGroup": data["ensembleGroup"],
+            "level": data["level"],
+            "mood": data["mood"],
+            "conductor": data["conductor"],
+        }}), 201
 
     # ---------- errors ----------
 

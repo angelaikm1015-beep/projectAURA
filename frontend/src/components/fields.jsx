@@ -118,3 +118,73 @@ function EyeIcon() {
     </svg>
   );
 }
+
+/** Multi-line text input, for the optional free-text brief. */
+export function TextAreaField({ label, error, hint, id, ...textareaProps }) {
+  const generatedId = useId();
+  const fieldId = id || generatedId;
+  const hintId = `${fieldId}-hint`;
+  const errorId = `${fieldId}-error`;
+
+  return (
+    <div className="field">
+      <label htmlFor={fieldId}>{label}</label>
+      <textarea
+        id={fieldId}
+        rows={3}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={[hint && hintId, error && errorId].filter(Boolean).join(" ") || undefined}
+        {...textareaProps}
+      />
+      {hint && <p className="hint" id={hintId}>{hint}</p>}
+      {error && <p className="error" id={errorId}>{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * A radio group drawn as pickable cards — used where the choice deserves a line
+ * of explanation next to it (what "Intermediate" means in years, whether a
+ * conductor changes the music). `options` are {value, label, description}.
+ *
+ * onChange receives a normal change event, so pages can reuse the same
+ * `set(field)` handler they use for inputs and selects.
+ */
+export function ChoiceCards({ label, name, options = [], value, error, onChange, columns }) {
+  const generatedId = useId();
+  const groupId = name || generatedId;
+  const errorId = `${groupId}-error`;
+
+  return (
+    <div className="field">
+      <span className="field-label" id={`${groupId}-label`}>{label}</span>
+      <div
+        className={`choice-cards${columns ? ` cols-${columns}` : ""}`}
+        role="radiogroup"
+        aria-labelledby={`${groupId}-label`}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={error ? errorId : undefined}
+      >
+        {options.map((option) => (
+          <label
+            key={option.value}
+            className={`choice-card${value === option.value ? " is-selected" : ""}`}
+          >
+            <input
+              type="radio"
+              name={groupId}
+              value={option.value}
+              checked={value === option.value}
+              onChange={onChange}
+            />
+            <span className="choice-card__title">{option.label}</span>
+            {option.description && (
+              <span className="choice-card__desc">{option.description}</span>
+            )}
+          </label>
+        ))}
+      </div>
+      {error && <p className="error" id={errorId}>{error}</p>}
+    </div>
+  );
+}
