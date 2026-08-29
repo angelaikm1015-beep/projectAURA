@@ -7,6 +7,10 @@
  * of one: it reflows to the window, prints at full resolution, and can be
  * played back through the Web Audio API to check the piece before rehearsal.
  *
+ * Once a score exists it takes over the screen. Everything the reader needs to
+ * know about the piece — its name, who it is written for, what it is about —
+ * sits in a rail down the side, and the whole remaining width is paper.
+ *
  * Sheets are deliberately printed dark-on-white inside the dark UI. That is what
  * paper looks like, and it is what comes out of the printer.
  */
@@ -16,6 +20,43 @@ import abcjs from "abcjs";
 
 const slug = (text) =>
   String(text || "score").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+/*
+ * How big the engraving is drawn.
+ *
+ * `responsive: "resize"` makes abcjs draw at `staffwidth` and then stretch the
+ * finished SVG to fill its container, so the *smaller* the staff width the
+ * larger everything lands on screen — notes, clefs, part names and all. Fewer
+ * measures per line comes with it: a line of four bars blown up to full width
+ * is what makes a sheet readable from a music stand instead of a cramped ribbon
+ * of quavers.
+ */
+const SHEET_SIZES = [
+  { id: "regular", label: "Regular", staffwidth: 1000, measuresPerLine: 6 },
+  { id: "large", label: "Large", staffwidth: 800, measuresPerLine: 4 },
+  { id: "huge", label: "Extra large", staffwidth: 600, measuresPerLine: 3 },
+];
+
+const DEFAULT_SIZE = "large";
+
+// Vertical air. abcjs measures these in points; its own defaults (46pt between
+// systems, 36pt between the staves inside one) pack a twelve-stave score tight
+// enough that the lines run together on paper.
+const SHEET_FORMAT = {
+  titlefont: "serif 22",
+  subtitlefont: "serif 15",
+  composerfont: "serif 12",
+  voicefont: "serif 13",
+  partsfont: "serif 14",
+  tempofont: "serif 13",
+  annotationfont: "serif 12",
+  gchordfont: "serif 13",
+  measurefont: "italic 11",
+  staffsep: 72,
+  sysstaffsep: 46,
+  musicspace: 14,
+  titlespace: 8,
+};
 
 function saveFile(filename, href) {
   const anchor = document.createElement("a");
@@ -46,25 +87,80 @@ function downloadMidi(filename, abc) {
   URL.revokeObjectURL(url);
 }
 
-/** One engraved sheet. Re-renders whenever the ABC changes. */
-function Sheet({ abc, onTune }) {
+/** "Violin ×3, Cello" — the instruments this piece was actually written for. */
+function writtenFor(score) {
+  const counts = new Map();
+  for (const part of score.parts) {
+    counts.set(part.instrument, (counts.get(part.instrument) || 0) + 1);
+  }
+  return [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
+}
+
+/*
+ * On a full score every system needs its instrument names down the left, or a
+ * player cannot tell which line is theirs. On a single player's sheet there is
+ * only one line, so repeating the name on every system is noise — it belongs
+ * once, at the top left.
+ *
+ * abcjs would do this itself (full name first system, short name after), but
+ * its line-wrapper rebuilds every system from the first one and carries the
+ * name along with it. `afterParsing` runs on the wrapped tune just before it is
+ * engraved, which is the place to take the repeats back off.
+ */
+function stripRepeatedNames(tune) {
+  let seenStaff = false;
+  for (const line of tune.lines || []) {
+    if (!line.staff) continue;
+    if (seenStaff) {
+      for (const staff of line.staff) delete staff.title;
+    }
+    seenStaff = true;
+  }
+}
+
+/** One engraved sheet. Re-renders whenever the ABC or the chosen size changes. */
+function Sheet({ abc, size, nameEveryLine = true, onTune }) {
   const host = useRef(null);
 
   useEffect(() => {
-    if (!host.current) return undefined;
-    const [tune] = abcjs.renderAbc(host.current, abc, {
+    const node = host.current;
+    if (!node) return undefined;
+
+    const options = {
+      afterParsing: nameEveryLine ? undefined : stripRepeatedNames,
       responsive: "resize",
       add_classes: true,
-      staffwidth: 740,
-      paddingtop: 12,
-      paddingbottom: 24,
-      format: { titlefont: "serif 20", subtitlefont: "serif 14", composerfont: "serif 11" },
-    });
-    onTune?.(tune);
-    return () => {
-      if (host.current) host.current.innerHTML = "";
+      staffwidth: size.staffwidth,
+      wrap: {
+        preferredMeasuresPerLine: size.measuresPerLine,
+        minSpacing: 1.5,
+        maxSpacing: 2.7,
+      },
+      // Each system becomes its own <svg> in its own block. On screen that
+      // changes nothing; on paper it is what lets a page break fall between two
+      // systems instead of slicing one in half.
+      oneSvgPerLine: true,
+      paddingtop: 16,
+      paddingbottom: 32,
+      paddingleft: 12,
+      paddingright: 12,
+      format: SHEET_FORMAT,
     };
-  }, [abc, onTune]);
+
+    let tune;
+    try {
+      [tune] = abcjs.renderAbc(node, abc, options);
+    } catch (error) {
+      // Line wrapping is the one part of this that has to guess at widths, and
+      // a sheet with over-long lines beats no sheet at all.
+      console.warn("Engraving without line wrapping —", error);
+      const { wrap, ...plain } = options;
+      [tune] = abcjs.renderAbc(node, abc, plain);
+    }
+
+    onTune?.(tune);
+    return () => { node.innerHTML = ""; };
+  }, [abc, size, nameEveryLine, onTune]);
 
   return <div className="sheet" ref={host} />;
 }
@@ -119,6 +215,57 @@ function PlaybackButton({ tune }) {
         : state === "error" ? "Playback unavailable"
         : "▶ Play"}
     </button>
+  );
+}
+
+/*
+ * Share, or take it back.
+ *
+ * Every piece is saved private the moment it is generated, so this is the only
+ * thing that ever makes one visible to anyone else — which is why it says
+ * plainly which state it is in rather than relying on the look of a switch.
+ */
+function ShareControl({ visibility, saving, onChange }) {
+  const [copied, setCopied] = useState(false);
+  const isPublic = visibility === "public";
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.warn("Clipboard unavailable:", error);
+    }
+  }
+
+  return (
+    <section className={`share${isPublic ? " is-public" : ""}`}>
+      <p className="share__state">
+        <span className="share__dot" aria-hidden="true" />
+        {isPublic ? "Shared in the gallery" : "Private to you"}
+      </p>
+      <p className="share__hint">
+        {isPublic
+          ? "Anyone signed in can find this piece and read every part."
+          : "Saved to your library. Nobody else can see it."}
+      </p>
+      <div className="share__actions">
+        <button
+          type="button"
+          className="btn btn-ghost btn-small"
+          onClick={() => onChange(isPublic ? "private" : "public")}
+          disabled={saving}
+        >
+          {saving ? "Saving…" : isPublic ? "Make it private" : "Share it"}
+        </button>
+        {isPublic && (
+          <button type="button" className="btn btn-ghost btn-small" onClick={copyLink}>
+            {copied ? "Link copied" : "Copy link"}
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -177,108 +324,239 @@ function ConductorNotes({ conductor }) {
   );
 }
 
-export function ScoreView({ score, onStartOver }) {
+export function ScoreView({
+  score,
+  brief,
+  pending = false,
+  pendingLabel = "Writing…",
+  error,
+  onRegenerate,
+  onNewBrief,
+  visibility,
+  onVisibilityChange,
+  owner,
+  saving = false,
+  nav,
+  footer,
+}) {
   const [activeId, setActiveId] = useState("full");
   const [tune, setTune] = useState(null);
+  const [sizeId, setSizeId] = useState(DEFAULT_SIZE);
 
-  const tabs = [
-    { id: "full", label: "Full score", abc: score.scoreAbc },
+  // A regenerated piece is a different piece: start it at the full score again.
+  useEffect(() => setActiveId("full"), [score]);
+
+  const size = SHEET_SIZES.find((option) => option.id === sizeId) || SHEET_SIZES[1];
+
+  const sheets = [
+    { id: "full", label: "Full score", abc: score.scoreAbc, nameEveryLine: true },
     ...score.parts.map((part) => ({
       id: part.partId,
       label: part.label,
       abc: part.abc,
       note: part.performanceNote,
       badge: part.transposed ? "transposing" : null,
+      nameEveryLine: false,
     })),
-    ...(score.conductor ? [{ id: "conductor", label: "Conductor", abc: score.scoreAbc }] : []),
+    ...(score.conductor
+      ? [{ id: "conductor", label: "Conductor", abc: score.scoreAbc, nameEveryLine: true }]
+      : []),
   ];
 
-  const active = tabs.find((tab) => tab.id === activeId) || tabs[0];
+  const active = sheets.find((sheet) => sheet.id === activeId) || sheets[0];
   const base = slug(score.title);
   const fileBase = active.id === "full" || active.id === "conductor"
     ? `${base}-full-score`
     : `${base}-${slug(active.label)}`;
 
+  const facts = [
+    score.tempoText,
+    `${score.tempoBpm} bpm`,
+    score.timeSignature,
+    score.concertKey,
+    `${score.measureCount} bars`,
+  ].filter(Boolean);
+
+  const tags = [
+    brief?.ensemble && { label: "Ensemble", value: brief.ensemble },
+    brief?.level && { label: "Level", value: brief.level },
+    brief?.mood && { label: "Mood", value: brief.mood },
+    brief && { label: "Conductor", value: brief.conductor ? "Yes" : "No" },
+  ].filter(Boolean);
+
   return (
-    <section className="score">
-      <header className="score__head">
-        <div>
-          <h2 className="score__title">{score.title}</h2>
-          <p className="score__facts">
-            {score.tempoText} · {score.tempoBpm} bpm · {score.timeSignature} ·{" "}
-            {score.concertKey} · {score.measureCount} bars ·{" "}
-            {score.parts.length} part{score.parts.length === 1 ? "" : "s"}
+    <div className="score-shell">
+      <aside className="score-aside">
+        <div className="score-aside__scroll">
+          <p className="score-aside__brand">AURA</p>
+
+          <h1 className="score-title">{score.title}</h1>
+          <p className="score-facts">{facts.join(" · ")}</p>
+          {owner && <p className="score-owner">by {owner}</p>}
+
+          {onVisibilityChange && <ShareControl
+            visibility={visibility}
+            saving={saving}
+            onChange={onVisibilityChange}
+          />}
+
+          <section className="score-block">
+            <h2 className="score-block__head">Written for</h2>
+            <ul className="score-forlist">
+              {writtenFor(score).map((entry) => <li key={entry}>{entry}</li>)}
+            </ul>
+            <p className="score-block__sub">
+              {score.parts.length} part{score.parts.length === 1 ? "" : "s"} in all
+            </p>
+          </section>
+
+          {tags.length > 0 && (
+            <section className="score-block">
+              <h2 className="score-block__head">The brief</h2>
+              <dl className="score-tags">
+                {tags.map((tag) => (
+                  <div className="score-tag" key={tag.label}>
+                    <dt>{tag.label}</dt>
+                    <dd>{tag.value}</dd>
+                  </div>
+                ))}
+              </dl>
+              {brief?.notes && <p className="score-block__sub">“{brief.notes}”</p>}
+            </section>
+          )}
+
+          <section className="score-block">
+            <h2 className="score-block__head">About this piece</h2>
+            <p className="score-about">{score.programNote}</p>
+          </section>
+
+          {nav && <div className="score-aside__nav">{nav}</div>}
+        </div>
+
+        {onRegenerate ? (
+          <div className="score-again">
+            <button type="button" className="btn" onClick={onRegenerate} disabled={pending}>
+              {pending ? pendingLabel : "Write another piece"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={onNewBrief}
+              disabled={pending}
+            >
+              Change the brief
+            </button>
+            <p className="score-again__hint">
+              A new piece, written from the same brief. “Change the brief” takes you
+              back to the questions.
+            </p>
+          </div>
+        ) : footer ? (
+          <div className="score-again">{footer}</div>
+        ) : null}
+      </aside>
+
+      <main className="score-main">
+        <div className="score-bar">
+          {/* One tab per player. Reading your own part matters more than
+              reading the full score, so the switch sits on top of the paper
+              rather than tucked away in the rail. */}
+          <div className="score-tabs" role="tablist" aria-label="Sheets">
+            {sheets.map((sheet) => (
+              <button
+                key={sheet.id}
+                type="button"
+                role="tab"
+                aria-selected={sheet.id === active.id}
+                className={`score-tab${sheet.id === active.id ? " is-active" : ""}`}
+                onClick={() => setActiveId(sheet.id)}
+              >
+                {sheet.label}
+                {sheet.badge && <span className="score-tab__badge">{sheet.badge}</span>}
+              </button>
+            ))}
+          </div>
+
+          <div className="score-bar__tools">
+            <div className="score-tools">
+              <PlaybackButton tune={tune} />
+              <button type="button" className="btn btn-ghost btn-small" onClick={() => window.print()}>
+                Print / save PDF
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => downloadText(`${fileBase}.abc`, active.abc)}
+              >
+                Download .abc
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-small"
+                onClick={() => downloadMidi(`${fileBase}.mid`, active.abc)}
+              >
+                Download MIDI
+              </button>
+            </div>
+
+            <div className="sheet-size" role="group" aria-label="Sheet size">
+              <span className="sheet-size__label">Size</span>
+              {SHEET_SIZES.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={option.id === size.id}
+                  className={`sheet-size__btn${option.id === size.id ? " is-active" : ""}`}
+                  onClick={() => setSizeId(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {pending && (
+          <p className="score-pending" aria-live="polite">
+            {pendingLabel} — the sheet below stays put until the new piece arrives.
           </p>
+        )}
+
+        {error && !pending && (
+          <p className="form-message is-error" role="alert">{error}</p>
+        )}
+
+        {score.warnings?.length > 0 && (
+          <div className="score-warnings" role="alert">
+            {score.warnings.map((warning, i) => <p key={i}>{warning}</p>)}
+          </div>
+        )}
+
+        {active.note && <p className="score-partnote">{active.note}</p>}
+
+        <div className="printable">
+          <Sheet
+            abc={active.abc}
+            size={size}
+            nameEveryLine={active.nameEveryLine}
+            onTune={setTune}
+          />
         </div>
-        <button type="button" className="btn btn-ghost btn-small" onClick={onStartOver}>
-          Write another
-        </button>
-      </header>
 
-      {score.warnings?.length > 0 && (
-        <div className="score__warnings" role="alert">
-          {score.warnings.map((warning, i) => <p key={i}>{warning}</p>)}
-        </div>
-      )}
+        {active.id === "conductor" && <ConductorNotes conductor={score.conductor} />}
 
-      <p className="score__note">{score.programNote}</p>
+        {active.id === "full" && score.rehearsalTips && (
+          <div className="podium">
+            <h3>Rehearsing this</h3>
+            <p>{score.rehearsalTips}</p>
+          </div>
+        )}
 
-      <div className="tabs" role="tablist" aria-label="Parts">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={tab.id === active.id}
-            className={`tab${tab.id === active.id ? " is-active" : ""}`}
-            onClick={() => setActiveId(tab.id)}
-          >
-            {tab.label}
-            {tab.badge && <span className="tab__badge">{tab.badge}</span>}
-          </button>
-        ))}
-      </div>
-
-      <div className="score__toolbar">
-        <PlaybackButton tune={tune} />
-        <button type="button" className="btn btn-ghost btn-small" onClick={() => window.print()}>
-          Print / save PDF
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-small"
-          onClick={() => downloadText(`${fileBase}.abc`, active.abc)}
-        >
-          Download .abc
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-small"
-          onClick={() => downloadMidi(`${fileBase}.mid`, active.abc)}
-        >
-          Download MIDI
-        </button>
-      </div>
-
-      {active.note && <p className="score__partnote">{active.note}</p>}
-
-      <div className="printable">
-        <Sheet abc={active.abc} onTune={setTune} />
-      </div>
-
-      {active.id === "conductor" && <ConductorNotes conductor={score.conductor} />}
-
-      {active.id === "full" && score.rehearsalTips && (
-        <div className="podium">
-          <h3>Rehearsing this</h3>
-          <p>{score.rehearsalTips}</p>
-        </div>
-      )}
-
-      <p className="score__footnote">
-        The .abc file opens in MuseScore, and MIDI imports into any notation or DAW
-        software if you want to edit the piece further.
-      </p>
-    </section>
+        <p className="score-footnote">
+          The .abc file opens in MuseScore, and MIDI imports into any notation or DAW
+          software if you want to edit the piece further.
+        </p>
+      </main>
+    </div>
   );
 }

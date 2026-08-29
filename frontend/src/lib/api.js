@@ -63,3 +63,31 @@ export const updateMe = (updates) =>
  */
 export const compose = (payload) =>
   request("/api/compose", { method: "POST", body: payload, authenticated: true });
+
+/* ---------- the library and the gallery ----------
+ *
+ * Every generated piece is saved automatically, private, at the moment it is
+ * made. These calls are for looking through them afterwards and deciding what
+ * to share. Listings carry summaries only; the engraved parts come with
+ * fetchScore, since a score with thirty parts is a lot to send for a card.
+ */
+
+/** Everything the signed-in user has generated, newest first. */
+export const fetchMyScores = () => request("/api/scores", { authenticated: true });
+
+/** Every piece anyone has shared. */
+export const fetchGallery = () => request("/api/gallery", { authenticated: true });
+
+/** One saved score in full — yours, or anyone's shared piece. */
+export const fetchScore = (id) => request(`/api/scores/${id}`, { authenticated: true });
+
+/** Share one piece, or take it back. `visibility` is "public" or "private". */
+export const setScoreVisibility = (id, visibility) =>
+  request(`/api/scores/${id}`, { method: "PATCH", body: { visibility }, authenticated: true });
+
+/** Share, or unshare, the whole library at once. */
+export const setAllScoresVisibility = (visibility) =>
+  request("/api/scores", { method: "PATCH", body: { visibility }, authenticated: true });
+
+export const deleteScore = (id) =>
+  request(`/api/scores/${id}`, { method: "DELETE", authenticated: true });

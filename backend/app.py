@@ -23,6 +23,7 @@ from google.api_core import exceptions as google_exceptions
 from werkzeug.exceptions import HTTPException
 
 import composer
+import library
 import options
 import validators
 from firebase import db, init_firebase, require_auth
@@ -177,15 +178,72 @@ def register_routes(app: Flask) -> None:
             app.logger.warning("Compose failed: %s", error)
             return jsonify({"message": str(error)}), error.status
 
-        return jsonify({"score": score, "request": {
+        brief = {
             "instruments": data["instruments"],
             "ensembleGroup": data["ensembleGroup"],
             "level": data["level"],
             "mood": data["mood"],
             "conductor": data["conductor"],
-        }}), 201
+            "notes": data.get("notes") or "",
+        }
+
+        # Save before answering. A piece that reached the browser but not the
+        # database is a piece the user loses by closing a tab, and it cost a
+        # slow, paid model call to make.
+        try:
+            score_id = library.save(g.uid, _display_name(), score, brief)
+        except google_exceptions.GoogleAPIError:
+            app.logger.exception("Could not save the generated score")
+            score_id = None
+
+        return jsonify({"score": score, "scoreId": score_id, "request": brief}), 201
+
+    # ---------- the library and the gallery ----------
+
+    @app.get("/api/scores")
+    @require_auth
+    def my_scores():
+        """Everything this user has generated, newest first."""
+        return jsonify({"scores": library.list_for_user(g.uid)})
+
+    @app.get("/api/gallery")
+    @require_auth
+    def gallery():
+        """Every piece anyone has chosen to share."""
+        return jsonify({"scores": library.list_public()})
+
+    @app.get("/api/scores/<score_id>")
+    @require_auth
+    def get_score(score_id):
+        """One saved score in full — the owner's, or anyone's shared piece."""
+        return jsonify(library.get(score_id, g.uid))
+
+    @app.patch("/api/scores/<score_id>")
+    @require_auth
+    def update_score(score_id):
+        """Share one piece, or take it back."""
+        data = request.get_json(silent=True) or {}
+        return jsonify(library.set_visibility(score_id, g.uid, data.get("visibility")))
+
+    @app.patch("/api/scores")
+    @require_auth
+    def update_all_scores():
+        """Share, or unshare, the whole library in one go."""
+        data = request.get_json(silent=True) or {}
+        changed = library.set_all_visibility(g.uid, data.get("visibility"))
+        return jsonify({"changed": changed, "scores": library.list_for_user(g.uid)})
+
+    @app.delete("/api/scores/<score_id>")
+    @require_auth
+    def delete_score(score_id):
+        library.delete(score_id, g.uid)
+        return jsonify({"deleted": score_id})
 
     # ---------- errors ----------
+
+    @app.errorhandler(library.LibraryError)
+    def library_error(error):
+        return jsonify({"message": str(error)}), error.status
 
     @app.errorhandler(404)
     def not_found(_error):
@@ -219,6 +277,16 @@ def serve_spa():
                        "in frontend/, or use `npm run dev` for the Vite dev server on :5173.",
         }), 503
     return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+def _display_name() -> str:
+    """What a shared piece is signed with.
+
+    The local part of the email only. A public gallery is the wrong place to
+    publish someone's full address, but a piece still needs an author.
+    """
+    email = (g.token or {}).get("email") or ""
+    return email.split("@")[0] or "someone"
 
 
 AFFILIATION_LABELS = {item["value"]: item["label"] for item in options.AFFILIATIONS}

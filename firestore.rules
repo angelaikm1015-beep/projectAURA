@@ -11,6 +11,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Saved scores are read and written only through the Flask API, which checks
+    // ownership before it shares, unshares or deletes anything. Denying the
+    // client outright means a browser can't flip someone else's piece to public
+    // or read a private one by guessing its id.
+    match /scores/{scoreId} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

@@ -290,6 +290,14 @@ select optgroup { background: #161a2e; color: var(--text); }
 /* buttons */
 
 .btn {
+  /* Both <button> and <Link> wear this class. An anchor is inline, so it would
+     ignore the width and sit beside its neighbour instead of stacking; the
+     flex box makes the two render identically. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  text-decoration: none;
   width: 100%;
   padding: 13px 18px;
   font: inherit;
@@ -406,7 +414,9 @@ a:focus-visible {
 /* The compose page is a full page rather than a centred card: a full score is
    wide, and it is taller than the viewport. Flex centring would clip its top. */
 body:has(.compose-page),
-#root:has(.compose-page) { align-items: flex-start; }
+#root:has(.compose-page),
+body:has(.library-page),
+#root:has(.library-page) { align-items: flex-start; }
 
 .compose-page {
   width: 100%;
@@ -447,11 +457,6 @@ body:has(.compose-page),
   backdrop-filter: blur(18px);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
-
-/* Once a score is on screen the form is no longer the main event. */
-.compose-form.is-secondary { opacity: 0.75; }
-.compose-form.is-secondary:hover,
-.compose-form.is-secondary:focus-within { opacity: 1; }
 
 @media (max-width: 620px) {
   .compose-form { padding: 24px 20px 22px; }
@@ -608,86 +613,366 @@ textarea:focus {
 .choice-card__title { font-size: 0.88rem; font-weight: 600; }
 .choice-card__desc { font-size: 0.74rem; color: var(--text-faint); line-height: 1.45; }
 
-/* ---------- generated score ---------- */
+/* ---------- the library and the gallery ---------- */
 
-.score {
-  background: var(--card);
-  border: 1px solid var(--card-border);
-  border-radius: 22px;
-  padding: 28px 30px 26px;
-  backdrop-filter: blur(18px);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  animation: rise 0.45s ease both;
+.library-page {
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 34px;
 }
 
-@media (prefers-reduced-motion: reduce) { .score { animation: none; } }
+.library { width: 100%; }
 
-.score__head {
+.library__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.library__title { margin: 0; font-size: 1.25rem; font-weight: 700; }
+.library__count { margin: 4px 0 0; font-size: 0.78rem; color: var(--text-faint); }
+.library__bulk { display: flex; gap: 8px; }
+
+.library__empty {
+  margin: 0;
+  padding: 26px 22px;
+  border: 1px dashed var(--card-border);
+  border-radius: var(--radius);
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 20px 18px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 18px;
+  backdrop-filter: blur(18px);
+}
+
+.card__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
+}
+
+.card__title {
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  line-height: 1.3;
+}
+
+.card__title:hover { text-decoration: underline; }
+
+.card__facts { margin: -4px 0 0; font-size: 0.74rem; color: var(--text-faint); }
+
+.card__for {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
   flex-wrap: wrap;
+  gap: 5px;
 }
 
-.score__title { margin: 0; font-size: 1.5rem; font-weight: 700; }
-
-.score__facts {
-  margin: 5px 0 0;
-  font-size: 0.78rem;
-  color: var(--text-faint);
+.card__for li {
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 999px;
 }
 
-.score__note {
-  margin: 16px 0 0;
-  font-size: 0.88rem;
-  line-height: 1.6;
-  color: var(--text-dim);
-}
-
-.score__partnote {
-  margin: 14px 0 0;
+.card__note {
+  margin: 0;
   font-size: 0.8rem;
+  line-height: 1.55;
   color: var(--text-dim);
-  font-style: italic;
+  /* Three lines is enough to recognise a piece; the rest is on its own page. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.score__warnings {
-  margin-top: 16px;
-  padding: 11px 14px;
+.card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.card__by { font-size: 0.74rem; color: var(--text-faint); margin-left: auto; }
+
+.chip {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+}
+
+.chip-public {
+  color: #bff3d2;
+  background: rgba(74, 222, 128, 0.12);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.btn-danger { color: var(--danger); border-color: rgba(255, 107, 129, 0.35); }
+.btn-danger:hover { background: rgba(255, 107, 129, 0.12); }
+
+/* ---------- sharing one piece ---------- */
+
+.share {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 15px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
   border-radius: var(--radius);
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.35);
-  color: #fde3a7;
-  font-size: 0.8rem;
 }
 
-.score__warnings p { margin: 0 0 4px; }
-.score__warnings p:last-child { margin-bottom: 0; }
+.share.is-public {
+  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.35);
+}
 
-.score__footnote {
-  margin: 18px 0 0;
-  font-size: 0.74rem;
+.share__state {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.share__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.share.is-public .share__dot { background: var(--success); }
+
+.share__hint { margin: 0; font-size: 0.72rem; line-height: 1.5; color: var(--text-faint); }
+.share__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+.score-owner { margin: -14px 0 0; font-size: 0.78rem; color: var(--text-dim); }
+
+/* ---------- generated score ---------- */
+
+/* A finished score takes the whole window: a rail of everything you need to
+   know about the piece, and paper for the rest of it. The app's centred,
+   padded page layout is undone for this one screen. */
+body:has(.score-shell) {
+  padding: 0;
+  display: block;
+}
+
+#root:has(.score-shell) { display: block; }
+
+.score-shell {
+  display: grid;
+  grid-template-columns: 330px minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  animation: rise 0.45s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) { .score-shell { animation: none; } }
+
+.score-aside {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--card-border);
+  background: var(--card);
+  backdrop-filter: blur(18px);
+}
+
+/* Everything about the piece scrolls; the buttons that ask for another one do
+   not, so a long part list can never push them out of reach. */
+.score-aside__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px 26px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.score-aside__brand {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
   color: var(--text-faint);
 }
 
-.tabs {
+.score-title {
+  margin: -8px 0 0;
+  font-size: 1.55rem;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.score-facts {
+  margin: -14px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.score-block { display: flex; flex-direction: column; gap: 8px; }
+
+.score-block__head {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.score-block__sub { margin: 0; font-size: 0.74rem; color: var(--text-faint); }
+
+.score-forlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 20px;
-  padding-bottom: 14px;
+}
+
+.score-forlist li {
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 999px;
+}
+
+.score-tags { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.score-tag {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+.score-tag dt { color: var(--text-faint); }
+.score-tag dd { margin: 0; color: var(--text); }
+
+.score-about {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.score-again {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 26px 22px;
+  border-top: 1px solid var(--card-border);
+  background: rgba(11, 13, 23, 0.5);
+}
+
+.score-again__hint { margin: 0; font-size: 0.72rem; color: var(--text-faint); line-height: 1.5; }
+
+.score-aside__nav { margin-top: auto; padding-top: 12px; }
+
+.score-aside__nav .compose-nav {
+  position: static;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* ---------- the paper side ---------- */
+
+.score-main {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 28px 60px;
+}
+
+.score-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: -20px -28px 18px;
+  padding: 14px 28px;
+  background: rgba(11, 13, 23, 0.88);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--card-border);
 }
 
-.tab {
+/* One tab per player, above the paper. With a dozen parts this scrolls
+   sideways rather than pushing the sheet down the page. */
+.score-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.score-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 13px;
+  flex: none;
+  padding: 7px 14px;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 600;
+  white-space: nowrap;
   color: var(--text-dim);
   background: var(--field);
   border: 1px solid var(--field-border);
@@ -696,37 +981,126 @@ textarea:focus {
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-.tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+.score-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
 
-.tab.is-active {
+.score-tab.is-active {
   color: #fff;
   border-color: transparent;
   background: linear-gradient(100deg, var(--accent), var(--accent-2));
 }
 
-.tab__badge {
-  font-size: 0.62rem;
+.score-tab__badge {
+  font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   opacity: 0.75;
 }
 
-.score__toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.score-bar__tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.score-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.score-partnote {
+  max-width: 1400px;
+  margin: 0 auto 12px;
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.sheet-size { display: flex; align-items: center; gap: 4px; }
+
+.sheet-size__label {
+  margin-right: 4px;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.sheet-size__btn {
+  padding: 6px 11px;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.sheet-size__btn:hover { color: var(--text); }
+
+.sheet-size__btn.is-active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(100deg, var(--accent), var(--accent-2));
+}
+
+.score-pending {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  border: 1px solid rgba(124, 92, 255, 0.35);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.score-warnings {
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border-radius: var(--radius);
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fde3a7;
+  font-size: 0.8rem;
+}
+
+.score-warnings p { margin: 0 0 4px; }
+.score-warnings p:last-child { margin-bottom: 0; }
+
+.score-footnote {
+  margin: 18px auto 0;
+  max-width: 1400px;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
 
 .btn-small { width: auto; padding: 8px 14px; font-size: 0.8rem; }
+
+/* The rail folds above the paper on anything too narrow to hold both. */
+@media (max-width: 1000px) {
+  .score-shell { display: block; height: auto; }
+  .score-aside { border-right: none; border-bottom: 1px solid var(--card-border); }
+  .score-aside__scroll { overflow: visible; padding-bottom: 4px; }
+  .score-again { background: none; }
+
+  .score-main { overflow: visible; padding: 16px 16px 48px; }
+  .score-bar { margin: -16px -16px 16px; padding: 12px 16px; }
+}
 
 /* The sheet is paper: dark ink on white, whatever the surrounding theme does.
    abcjs draws everything as filled SVG paths, so the ink colour is set there. */
 .printable {
-  margin-top: 16px;
+  max-width: 1400px;
+  margin: 0 auto;
   border-radius: var(--radius);
   overflow: hidden;
   background: #fff;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
 
 .sheet {
-  padding: 18px 12px;
+  padding: 26px 22px 34px;
   background: #fff;
   overflow-x: auto;
 }
@@ -739,7 +1113,8 @@ textarea:focus {
 /* ---------- conductor material ---------- */
 
 .podium {
-  margin-top: 22px;
+  max-width: 1400px;
+  margin: 22px auto 0;
   padding: 18px 20px;
   background: var(--field);
   border: 1px solid var(--field-border);
@@ -792,6 +1167,8 @@ textarea:focus {
 
 /* Printing a score should produce the sheet on its own — no app chrome, no
    toolbar, and no dark background eating a print cartridge. */
+@page { margin: 12mm; }
+
 @media print {
   body {
     background: #fff;
@@ -801,26 +1178,56 @@ textarea:focus {
 
   .compose-top,
   .compose-form,
-  .tabs,
-  .score__toolbar,
-  .score__warnings,
-  .score__footnote,
-  .score__head button { display: none !important; }
+  .score-aside,
+  .score-bar,
+  .score-tabs,
+  .score-pending,
+  .score-warnings,
+  .score-footnote { display: none !important; }
 
   .compose-page { max-width: none; gap: 0; }
 
-  .score {
-    background: none;
-    border: none;
-    box-shadow: none;
-    backdrop-filter: none;
-    padding: 0;
+  /* The rail is gone, so the paper gets the sheet of paper. */
+  .score-shell {
+    display: block;
+    height: auto;
     animation: none;
   }
 
-  .score__title, .score__facts, .score__note, .score__partnote, .podium { color: #000; }
-  .podium { background: none; border: 1px solid #ccc; }
+  .score-main {
+    overflow: visible;
+    padding: 0;
+  }
 
-  .printable, .sheet { overflow: visible; }
-  .sheet { break-inside: auto; }
+  .printable {
+    max-width: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .sheet { padding: 0; }
+
+  .podium {
+    max-width: none;
+    color: #000;
+    background: none;
+    border: 1px solid #ccc;
+    break-before: page;
+  }
+
+  .printable { overflow: visible; }
+
+  /* Let a long score run over as many pages as it needs, but never break a
+     system in half. abcjs gives each system its own block for exactly this —
+     but it also writes display and overflow onto the sheet element as inline
+     styles, and an inline-block with hidden overflow is monolithic to the
+     printer: it refuses to fragment at all. Both have to be overridden. */
+  .sheet,
+  .sheet.abcjs-container {
+    display: block !important;
+    overflow: visible !important;
+    break-inside: auto;
+  }
+
+  .sheet > div { break-inside: avoid; }
 }

@@ -25,14 +25,13 @@ export function totalParts(chosen) {
   return chosen.reduce((sum, entry) => sum + entry.parts, 0);
 }
 
-export function InstrumentPicker({ label, groups = [], info = {}, value = [], maxTotal = 12, error, onChange }) {
+export function InstrumentPicker({ label, groups = [], info = {}, value = [], error, onChange }) {
   const generatedId = useId();
   const selectId = `${generatedId}-add`;
   const errorId = `${generatedId}-error`;
 
   const chosenNames = new Set(value.map((entry) => entry.name));
   const used = totalParts(value);
-  const remaining = maxTotal - used;
 
   // Anything already chosen drops out of the dropdown — it's re-added by
   // raising its part count, not by picking it twice.
@@ -64,12 +63,12 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], ma
         aria-label="Add an instrument"
         defaultValue=""
         onChange={add}
-        disabled={remaining <= 0 || !available.length}
+        disabled={!available.length}
         aria-invalid={error ? "true" : undefined}
         aria-describedby={error ? errorId : undefined}
       >
         <option value="" disabled>
-          {remaining <= 0 ? "That's the most parts we can write" : "Add an instrument…"}
+          {available.length ? "Add an instrument…" : "Every instrument is already on the list"}
         </option>
         {available.map((group) => (
           <optgroup key={group.group} label={group.group}>
@@ -85,7 +84,7 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], ma
           {value.map((entry) => {
             const spec = info[entry.name] || { maxParts: 1, clef: "treble" };
             const labels = partLabels(entry.name, entry.parts);
-            const canAdd = entry.parts < spec.maxParts && remaining > 0;
+            const canAdd = entry.parts < spec.maxParts;
 
             return (
               <li className="roster__row" key={entry.name}>
@@ -135,7 +134,7 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], ma
       <p className="hint">
         {value.length === 0
           ? "Pick every instrument that will be playing. Add the same instrument once, then set how many parts it splits into."
-          : `${used} part${used === 1 ? "" : "s"} of ${maxTotal}. Each part gets its own printed sheet.`}
+          : `${used} part${used === 1 ? "" : "s"}. Each part gets its own printed sheet.`}
       </p>
       {error && <p className="error" id={errorId}>{error}</p>}
     </div>

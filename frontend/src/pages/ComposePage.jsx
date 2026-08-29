@@ -9,6 +9,12 @@
  * Generation is slow — the model is writing a dozen aligned staves — so the
  * request is left to run and the wait is narrated rather than hidden behind a
  * spinner that looks stuck.
+ *
+ * The page has two states and only ever shows one of them. Before a score
+ * exists it is the brief. Once a score exists the brief steps out of the way
+ * entirely and the sheet gets the whole screen; the answers that produced it
+ * are carried along and shown beside it, and another piece can be asked for
+ * without going back to the form at all.
  */
 
 import { useEffect, useState } from "react";
@@ -19,7 +25,8 @@ import { ChoiceCards, SelectField, TextAreaField } from "../components/fields";
 import { InstrumentPicker, totalParts } from "../components/instrument-picker";
 import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
-import { ApiError, compose, fetchOptions } from "../lib/api";
+import { ApiError, compose, fetchOptions, setScoreVisibility } from "../lib/api";
+import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
 
 const EMPTY = {
@@ -71,6 +78,9 @@ export default function ComposePage() {
   const [pending, setPending] = useState(false);
   const [step, setStep] = useState(0);
   const [score, setScore] = useState(null);
+  const [brief, setBrief] = useState(null);
+  const [saved, setSaved] = useState(null); // { id, visibility } once it is stored
+  const [sharing, setSharing] = useState(false);
   const [options, setOptions] = useState(OPTIONS);
 
   // Same pattern as signup: render from the bundled copy immediately, prefer the
@@ -106,21 +116,50 @@ export default function ComposePage() {
 
   const moodHint = options.moods?.find((m) => m.value === values.mood)?.guidance;
   const groupHint = options.ensembleGroups?.find((g) => g.value === values.ensembleGroup)?.guidance;
-  const maxTotal = options.limits?.maxTotalParts ?? 12;
 
   function validate() {
-    const count = totalParts(values.instruments);
     return {
-      instruments: !values.instruments.length
-        ? "Pick at least one instrument."
-        : count > maxTotal
-        ? `That's ${count} parts — ${maxTotal} is the most we can write in one piece.`
-        : null,
+      instruments: values.instruments.length ? null : "Pick at least one instrument.",
       ensembleGroup: values.ensembleGroup ? null : "Select who is playing.",
       level: values.level ? null : "Select a playing level.",
       mood: values.mood ? null : "Select a mood.",
       conductor: values.conductor ? null : "Say whether there's a conductor.",
     };
+  }
+
+  /* What actually gets sent. Both the first generation and every "write
+     another" after it go out as exactly this, so the second piece is written
+     to the same brief as the first. */
+  function payload() {
+    return {
+      instruments: values.instruments,
+      ensembleGroup: values.ensembleGroup,
+      level: values.level,
+      mood: values.mood,
+      conductor: values.conductor === "yes",
+      notes: values.notes.trim(),
+    };
+  }
+
+  async function runCompose(sent) {
+    setMessage(null);
+    setPending(true);
+    try {
+      const result = await compose(sent);
+      setScore(result.score);
+      setBrief(describeBrief(options, sent));
+      // The API saves every piece as it makes it. Without an id the score is
+      // still on screen and still downloadable, it just can't be shared.
+      setSaved(result.scoreId ? { id: result.scoreId, visibility: "private" } : null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error) {
+      if (error instanceof ApiError && Object.keys(error.fieldErrors).length) {
+        setErrors(error.fieldErrors);
+      }
+      setMessage({ text: error.message, kind: "error" });
+    } finally {
+      setPending(false);
+    }
   }
 
   async function handleSubmit(event) {
@@ -134,27 +173,20 @@ export default function ComposePage() {
       return;
     }
     setErrors({});
-    setPending(true);
-    setScore(null);
 
+    await runCompose(payload());
+  }
+
+  async function handleShare(visibility) {
+    if (!saved) return;
+    setSharing(true);
     try {
-      const result = await compose({
-        instruments: values.instruments,
-        ensembleGroup: values.ensembleGroup,
-        level: values.level,
-        mood: values.mood,
-        conductor: values.conductor === "yes",
-        notes: values.notes.trim(),
-      });
-      setScore(result.score);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      await setScoreVisibility(saved.id, visibility);
+      setSaved((current) => ({ ...current, visibility }));
     } catch (error) {
-      if (error instanceof ApiError && Object.keys(error.fieldErrors).length) {
-        setErrors(error.fieldErrors);
-      }
       setMessage({ text: error.message, kind: "error" });
     } finally {
-      setPending(false);
+      setSharing(false);
     }
   }
 
@@ -163,24 +195,45 @@ export default function ComposePage() {
     navigate("/login", { replace: true });
   }
 
+  const accountNav = (
+    <nav className="compose-nav">
+      <Link className="link" to="/welcome">My library</Link>
+      <Link className="link" to="/gallery">Gallery</Link>
+      <button type="button" className="link link-button" onClick={handleLogout}>
+        Log out {user ? `(${user.email})` : ""}
+      </button>
+    </nav>
+  );
+
+  // A score on screen replaces the brief rather than sitting on top of it: the
+  // sheet is the thing the user came for, and it needs every pixel.
+  if (score) {
+    return (
+      <ScoreView
+        score={score}
+        brief={brief}
+        pending={pending}
+        pendingLabel={WAIT_STEPS[step]}
+        error={message?.kind === "error" ? message.text : null}
+        visibility={saved?.visibility}
+        onVisibilityChange={saved ? handleShare : undefined}
+        saving={sharing}
+        onRegenerate={() => runCompose(payload())}
+        onNewBrief={() => { setScore(null); setMessage(null); }}
+        nav={accountNav}
+      />
+    );
+  }
+
   return (
     <div className="compose-page">
       <header className="compose-top">
         <BrandHeader tagline="Describe your ensemble. We'll write the music." />
-        <nav className="compose-nav">
-          <Link className="link" to="/welcome">Profile</Link>
-          <button type="button" className="link link-button" onClick={handleLogout}>
-            Log out {user ? `(${user.email})` : ""}
-          </button>
-        </nav>
+        {accountNav}
       </header>
 
-      {score && <ScoreView score={score} onStartOver={() => setScore(null)} />}
-
-      <form className={`form compose-form${score ? " is-secondary" : ""}`} onSubmit={handleSubmit} noValidate>
+      <form className="form compose-form" onSubmit={handleSubmit} noValidate>
         <FormMessage text={message?.text} kind={message?.kind} />
-
-        {score && <p className="section-title">Write another piece</p>}
 
         <p className="section-title">Who's playing</p>
 
@@ -189,7 +242,6 @@ export default function ComposePage() {
           groups={options.scoreInstruments}
           info={options.instrumentInfo}
           value={values.instruments}
-          maxTotal={maxTotal}
           error={errors.instruments}
           onChange={setInstruments}
         />

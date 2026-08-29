@@ -129,8 +129,9 @@ ENSEMBLE_GROUPS = [
     {
         "value": "college",
         "label": "College / University",
-        "guidance": "Rehearses efficiently and reads well. Counterpoint, meter changes and "
-                    "extended technique are all fair game.",
+        "guidance": "Rehearses efficiently and reads well. Expect counterpoint, meter "
+                    "changes and extended technique — writing down to this group "
+                    "wastes it.",
     },
     {
         "value": "community",
@@ -147,8 +148,9 @@ ENSEMBLE_GROUPS = [
     {
         "value": "professional",
         "label": "Professional ensemble",
-        "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically and "
-                    "without hand-holding.",
+        "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically, "
+                    "without hand-holding, and give every section something worth "
+                    "playing.",
     },
 ]
 
@@ -246,10 +248,6 @@ MOODS = [
      "guidance": "Fast tempo, relentless rhythmic pulse, syncopation, short punchy "
                  "motifs traded between parts."},
 ]
-
-# How many separate parts one instrument can be split into — the "Violin 1, 2, 3"
-# case. Section instruments divide freely; a drum set does not.
-MAX_TOTAL_PARTS = 12
 
 # Per-instrument engraving and playback facts. These are what keep the generated
 # music *playable*: a Bb trumpet part has to be written a tone above concert
@@ -370,7 +368,6 @@ def as_dict() -> dict:
                    "transpose": spec["transpose"]}
             for name, spec in INSTRUMENT_SPECS.items()
         },
-        "limits": {"maxTotalParts": MAX_TOTAL_PARTS},
     }
 
 

@@ -148,13 +148,12 @@ def validate_instruments(value) -> str | None:
 
     The part count is the "Violin 1, 2, 3" case: one instrument, several
     independent lines. Each instrument caps its own division (a drum set can't
-    be split four ways) and the whole score caps total parts, because every
-    extra part is another full staff the model has to keep aligned.
+    be split four ways), but the score as a whole does not cap the roster —
+    a full orchestra is a legitimate thing to ask for.
     """
     if not isinstance(value, list) or not value:
         return "Pick at least one instrument."
 
-    total = 0
     seen = set()
     for entry in value:
         if not isinstance(entry, dict):
@@ -173,11 +172,7 @@ def validate_instruments(value) -> str | None:
             return f"How many {name} parts? Choose at least 1."
         if parts > spec["maxParts"]:
             return f"{name} can be split into at most {spec['maxParts']} part(s)."
-        total += parts
 
-    if total > options.MAX_TOTAL_PARTS:
-        return (f"That's {total} parts — {options.MAX_TOTAL_PARTS} is the most "
-                "we can write in one piece.")
     return None
 
 

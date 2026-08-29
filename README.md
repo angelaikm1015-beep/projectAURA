@@ -98,7 +98,19 @@ firebase deploy --only firestore:rules
 | `POST` | `/api/signup` | — | Validate, create the Auth user, write the profile |
 | `GET` | `/api/me` | Bearer | The signed-in user's profile |
 | `PATCH` | `/api/me` | Bearer | Update profile fields (not email/password) |
-| `POST` | `/api/compose` | Bearer | Generate a score. Slow — 30–120s — and it spends money, hence the auth. |
+| `POST` | `/api/compose` | Bearer | Generate a score, save it to the library, return it with its `scoreId`. Slow — 30–120s — and it spends money, hence the auth. |
+| `GET` | `/api/scores` | Bearer | The signed-in user's library, newest first (summaries only) |
+| `PATCH` | `/api/scores` | Bearer | Share, or unshare, the whole library at once |
+| `GET` | `/api/scores/<id>` | Bearer | One saved score in full — the owner's, or anyone's shared piece |
+| `PATCH` | `/api/scores/<id>` | Bearer | Set one piece's `visibility` to `public` or `private` (owner only) |
+| `DELETE` | `/api/scores/<id>` | Bearer | Delete one piece for good (owner only) |
+| `GET` | `/api/gallery` | Bearer | Every piece anyone has shared |
+
+Every generated score is written to Firestore before the response is sent, so
+closing the tab never loses a piece. Scores are saved **private**; they become
+visible in the gallery only when their owner shares them, one piece at a time.
+Asking for a private score that isn't yours returns `404`, not `403` — a stranger
+shouldn't be able to learn which ids exist.
 
 Validation failures come back as `400` with `{"message": ..., "errors": {"<field>": "<message>"}}`,
 which the frontend renders under the matching input.
@@ -185,7 +197,7 @@ Six answers become the brief:
 
 | Input | Effect on the music |
 | --- | --- |
-| **Instruments**, and how many of each | "Violin ×3" becomes Violin I, II and III — three *independent* lines, not one line tripled. Capped per instrument (a section divides, a drum set doesn't) and at 12 parts total. |
+| **Instruments**, and how many of each | "Violin ×3" becomes Violin I, II and III — three *independent* lines, not one line tripled. Capped per instrument (a section divides, a drum set doesn't); the roster as a whole is uncapped, so a full orchestra is a legitimate ask. |
 | **Group** — middle school … professional | How much rehearsal time to assume, and how much doubling the parts need. |
 | **Level** — the four bands, by years played | Keys, rhythms, ranges, positions and technique. Writing above a group's level is the worst failure here, so this constrains hardest. |
 | **Mood** | The theme of the piece: it picks the key, tempo, register, articulation and harmony. |

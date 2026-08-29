@@ -34,6 +34,24 @@ DEFAULT_MODEL = "gpt-5.5"
 # duration convention across the score: 1 = eighth, 2 = quarter, 4 = half.
 UNIT_NOTE_LENGTH = "1/8"
 
+# Output budget. There is no cap on how many instruments may be asked for, so
+# the budget cannot be a constant: every staff is another full line of ABC the
+# model has to write out, and a fixed ceiling would silently truncate a large
+# ensemble mid-score. Scale it with the roster instead, and let a deployment
+# lower the ceiling for a model with a smaller output window.
+BASE_OUTPUT_TOKENS = 8000
+OUTPUT_TOKENS_PER_STAFF = 900
+MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "48000"))
+
+
+def _token_budget(roster: list) -> int:
+    """Room to write every staff in ``roster``, within the model's ceiling.
+
+    Grand-staff instruments count twice — a piano part is two written lines.
+    """
+    staves = sum(part["staves"] for part in roster)
+    return min(MAX_OUTPUT_TOKENS, BASE_OUTPUT_TOKENS + OUTPUT_TOKENS_PER_STAFF * staves)
+
 _client = None
 
 
@@ -185,9 +203,55 @@ MUSICAL REQUIREMENTS
     arpeggio exercises or aimless noodling.
   * The parts must fit together: check that simultaneous notes form the harmony
     you intend, and that the lowest-sounding part carries a sensible bass line.
-  * Respect the difficulty brief exactly. Writing above a group's level is the
-    worst failure mode here — a piece they cannot play is worth nothing.
+  * Respect the difficulty brief exactly, and in BOTH directions. Writing above
+    a group's level hands them a piece they cannot play. Writing below it hands
+    them a piece that wastes their rehearsal and insults their training. Neither
+    is acceptable, and the second is the one that happens by accident: when in
+    doubt you will reach for even rhythms and plain diatonic harmony, and for an
+    advanced group that is the failure. Meet the demands listed in the brief.
 """
+
+
+# What the music has to *contain* at each level.
+#
+# The level guidance in options.py describes the ceiling — how hard the writing
+# is allowed to get. On its own that reads as permission, and permission is not
+# enough: told only that anything is allowed, the model still writes the safe,
+# plain thing. These are the floor, stated as requirements.
+LEVEL_DEMANDS = {
+    "beginner": [
+        "A tune the group will actually enjoy playing. Simple is not the same",
+        "as dull: the melody must have a shape and go somewhere, and the",
+        "accompanying parts must have something to do besides whole notes.",
+    ],
+    "intermediate": [
+        "At least one passage in sixteenth notes at a manageable tempo, at least",
+        "one syncopated or dotted figure, at least one dynamic shift the players",
+        "have to shape, and one place where a part is briefly exposed.",
+    ],
+    "higher-intermediate": [
+        "Genuine counterpoint — at least one substantial passage where two or",
+        "more parts move independently against each other rather than in block",
+        "rhythm. At least one of: a meter change, triplets against duple, or a",
+        "modulation. At least one exposed solo line, and articulation and",
+        "dynamics marked throughout rather than left blank.",
+    ],
+    "pro": [
+        "These are players who do this for a living, and this piece has to be",
+        "worth their rehearsal time. It MUST contain, at minimum:",
+        "  - harmony beyond plain diatonic triads: secondary dominants,",
+        "    borrowed chords, extended sonorities, and a real modulation;",
+        "  - rhythm beyond straight quarters and eighths: syncopation,",
+        "    cross-rhythm, and mixed or changing meter where the music wants it;",
+        "  - sustained independent counterpoint, not melody over accompaniment;",
+        "  - at least one technically demanding passage for every section —",
+        "    fast runs, wide leaps, or writing at the extremes of the range;",
+        "  - a full dynamic map from pp to ff with hairpins and accents marked;",
+        "  - development of the theme, not repetition of it.",
+        "Even, four-square diatonic writing is a FAILED response at this level,",
+        "however clean it is.",
+    ],
+}
 
 
 def _range_line(part, level_value):
@@ -243,6 +307,9 @@ def build_user_prompt(request: dict, roster: list) -> str:
         "",
         f"PLAYING LEVEL: {level['label']} ({level['years']} of experience).",
         f"  {level['guidance']}",
+        "",
+        "THIS LEVEL DEMANDS — the writing is wrong if these are missing:",
+        *[f"  {line}" for line in LEVEL_DEMANDS[level["value"]]],
         "",
         f"MOOD — this is the theme of the piece: {mood['label'].upper()}.",
         f"  {mood['guidance']}",
@@ -418,13 +485,14 @@ def assemble_abc(score: dict, roster: list, only_part_id: str | None = None) -> 
     included = [p for p in roster if only_part_id is None or p["partId"] == only_part_id]
 
     subtitle = score.get("tempoText") or ""
+    # Deliberately no second T: naming the player. abcjs treats a second title
+    # as a subtitle line, which pushes the first staff to line index 1 — and it
+    # only prints the time signature on line 0, so the part would come out
+    # without its meter. The player's name reaches the sheet through the voice
+    # declaration below, which puts it at the top left where it belongs.
     header = [
         "X:1",
         f"T:{score['title']}",
-    ]
-    if only_part_id is not None and included:
-        header.append(f"T:{included[0]['label']}")
-    header += [
         "C:Generated by AURA",
         f"M:{score['timeSignature']}",
         f"L:{UNIT_NOTE_LENGTH}",
@@ -583,7 +651,7 @@ def _repair(score: dict, roster: list, problems: list, messages: list, model: st
                             "schema": REPAIR_SCHEMA},
         },
         temperature=0.2,
-        max_tokens=16000,
+        max_tokens=_token_budget(roster),
     )
 
     if completion.choices[0].finish_reason == "length":
@@ -666,7 +734,7 @@ def compose(request: dict) -> dict:
             # Some warmth helps it commit to a real melodic idea; much more and
             # the counting across parts starts to slip.
             temperature=0.8,
-            max_tokens=16000,
+            max_tokens=_token_budget(roster),
         )
     except OpenAIError as error:
         raise ComposerError(_explain(error, model)) from error

@@ -417,7 +417,7 @@ export const OPTIONS = {
     {
       "value": "college",
       "label": "College / University",
-      "guidance": "Rehearses efficiently and reads well. Counterpoint, meter changes and extended technique are all fair game."
+      "guidance": "Rehearses efficiently and reads well. Expect counterpoint, meter changes and extended technique — writing down to this group wastes it."
     },
     {
       "value": "community",
@@ -432,7 +432,7 @@ export const OPTIONS = {
     {
       "value": "professional",
       "label": "Professional ensemble",
-      "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically and without hand-holding."
+      "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically, without hand-holding, and give every section something worth playing."
     }
   ],
   "levels": [
@@ -831,8 +831,5 @@ export const OPTIONS = {
       "pitched": true,
       "transpose": 0
     }
-  },
-  "limits": {
-    "maxTotalParts": 12
   }
 };
