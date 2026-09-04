@@ -7,6 +7,7 @@ import GalleryPage from "./pages/GalleryPage";
 import LoginPage from "./pages/LoginPage";
 import ScorePage from "./pages/ScorePage";
 import SignupPage from "./pages/SignupPage";
+import UserPage from "./pages/UserPage";
 import WelcomePage from "./pages/WelcomePage";
 
 export default function App() {
@@ -32,6 +33,7 @@ export default function App() {
       <Route path="/compose" element={user ? <ComposePage /> : <Navigate to="/login" replace />} />
       <Route path="/gallery" element={user ? <GalleryPage /> : <Navigate to="/login" replace />} />
       <Route path="/score/:id" element={user ? <ScorePage /> : <Navigate to="/login" replace />} />
+      <Route path="/u/:uid" element={user ? <UserPage /> : <Navigate to="/login" replace />} />
       <Route path="*" element={<Navigate to={user ? "/compose" : "/login"} replace />} />
     </Routes>
   );

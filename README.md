@@ -107,6 +107,7 @@ firebase deploy --only firestore:rules
 | `POST` | `/api/scores/<id>/undo` | Bearer | Restore the version from before the last revision (owner only) |
 | `DELETE` | `/api/scores/<id>` | Bearer | Delete one piece for good (owner only) |
 | `GET` | `/api/gallery` | Bearer | The community feed, newest post first. `?level=` and `?ensemble=` narrow it; the reply carries facet counts for the filter UI |
+| `GET` | `/api/users/<uid>` | Bearer | Someone's public page — who they are and everything they've shared |
 | `GET` | `/api/me/likes` | Bearer | Pieces this user liked |
 | `GET` | `/api/me/saves` | Bearer | Pieces this user saved for later |
 | `POST` | `/api/scores/<id>/like` | Bearer | Toggle a like; returns the new count |

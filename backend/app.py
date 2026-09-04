@@ -220,6 +220,12 @@ def register_routes(app: Flask) -> None:
             ensemble=request.args.get("ensemble") or None,
         ))
 
+    @app.get("/api/users/<author_uid>")
+    @require_auth
+    def author_page(author_uid):
+        """Someone else's shelf — everything they have chosen to share."""
+        return jsonify(library.list_by_author(author_uid, g.uid))
+
     @app.get("/api/me/likes")
     @require_auth
     def my_likes():

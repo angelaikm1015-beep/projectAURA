@@ -123,6 +123,7 @@ export default function ScorePage() {
       caption={saved.caption}
       onVisibilityChange={saved.mine ? handleVisibility : undefined}
       owner={saved.mine ? null : saved.ownerName}
+      ownerUid={saved.uid}
       saving={saving}
       onRevise={saved.mine ? handleRevise : undefined}
       onUndo={handleUndo}

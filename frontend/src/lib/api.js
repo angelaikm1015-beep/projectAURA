@@ -88,6 +88,9 @@ export const fetchGallery = ({ level, ensemble } = {}) => {
   return request(`/api/gallery${suffix}`, { authenticated: true });
 };
 
+/** Someone else's page: who they are and what they've shared. */
+export const fetchAuthor = (uid) => request(`/api/users/${uid}`, { authenticated: true });
+
 /** Pieces this user has liked, or saved for later. */
 export const fetchLiked = () => request("/api/me/likes", { authenticated: true });
 export const fetchSaved = () => request("/api/me/saves", { authenticated: true });

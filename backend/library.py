@@ -321,6 +321,35 @@ def delete_comment(uid: str, score_id: str, comment_id: str) -> dict:
     return {"comments": list_comments(score_id, uid)}
 
 
+def list_by_author(author_uid: str, viewer_uid: str | None = None) -> dict:
+    """What one person has shared, newest post first.
+
+    Only their public pieces, even when the viewer is the author — this is the
+    page everyone else sees, and it would be confusing if it showed you a
+    different shelf from the one you are sharing.
+    """
+    query = db().collection(SCORES_COLLECTION).where(
+        filter=FieldFilter("uid", "==", author_uid))
+    rows = [_summary(doc) for doc in query.stream()
+            if (doc.to_dict() or {}).get("visibility") == PUBLIC]
+    rows = _newest_first(rows, "sharedAt")
+
+    name = rows[0]["ownerName"] if rows else None
+    if not name:
+        # Nothing shared, but the person may still exist and have private work.
+        any_doc = next(iter(query.limit(1).stream()), None)
+        if any_doc is None:
+            raise LibraryError("No such person.", 404)
+        name = (any_doc.to_dict() or {}).get("ownerName")
+
+    return {
+        "uid": author_uid,
+        "ownerName": name or "someone",
+        "scores": _with_reactions(viewer_uid, rows),
+        "likesReceived": sum(row.get("likeCount", 0) for row in rows),
+    }
+
+
 def get(score_id: str, uid: str | None) -> dict:
     """One score in full, if ``uid`` is allowed to see it.
 

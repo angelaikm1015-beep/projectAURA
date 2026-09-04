@@ -136,13 +136,15 @@ export function Post({ post, levelLabel, ensembleLabel, onChanged }) {
   return (
     <li className="post">
       <header className="post__head">
-        <span className="post__avatar" aria-hidden="true">
-          {(post.ownerName || "?").charAt(0).toUpperCase()}
-        </span>
-        <div className="post__who">
-          <span className="post__author">{post.ownerName || "someone"}</span>
-          <span className="post__when">{when(post.sharedAt || post.createdAt)}</span>
-        </div>
+        <Link className="post__by" to={`/u/${post.uid}`}>
+          <span className="post__avatar" aria-hidden="true">
+            {(post.ownerName || "?").charAt(0).toUpperCase()}
+          </span>
+          <span className="post__who">
+            <span className="post__author">{post.ownerName || "someone"}</span>
+            <span className="post__when">{when(post.sharedAt || post.createdAt)}</span>
+          </span>
+        </Link>
         <div className="post__tags">
           {levelLabel && <span className="tag">{levelLabel}</span>}
           {ensembleLabel && <span className="tag">{ensembleLabel}</span>}

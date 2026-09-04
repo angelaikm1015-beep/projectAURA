@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import abcjs from "abcjs";
 
 const slug = (text) =>
@@ -687,6 +688,7 @@ export function ScoreView({
   revising = false,
   revisionSummary,
   owner,
+  ownerUid,
   saving = false,
   nav,
   footer,
@@ -745,7 +747,11 @@ export function ScoreView({
 
           <h1 className="score-title">{score.title}</h1>
           <p className="score-facts">{facts.join(" · ")}</p>
-          {owner && <p className="score-owner">by {owner}</p>}
+          {owner && (
+            <p className="score-owner">
+              by {ownerUid ? <Link className="link" to={`/u/${ownerUid}`}>{owner}</Link> : owner}
+            </p>
+          )}
 
           {onVisibilityChange && <ShareControl
             visibility={visibility}
