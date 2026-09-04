@@ -69,7 +69,7 @@ export default function ScorePage() {
       <AuthCard>
         <BrandHeader tagline="That piece isn't available" />
         <FormMessage text={error} />
-        <Link className="btn" to="/welcome">Back to my library</Link>
+        <Link className="btn" to="/welcome">Back to my page</Link>
       </AuthCard>
     );
   }
@@ -92,17 +92,18 @@ export default function ScorePage() {
       saving={saving}
       nav={
         <nav className="compose-nav">
-          <Link className="link" to="/welcome">My library</Link>
+          <Link className="link" to="/compose">Compose</Link>
           <Link className="link" to="/gallery">Gallery</Link>
+          <Link className="link" to="/welcome">My page</Link>
           <button type="button" className="link link-button" onClick={handleLogout}>
-            Log out {user ? `(${user.email})` : ""}
+            Log out
           </button>
         </nav>
       }
       footer={
         <>
           <Link className="btn" to="/compose">Write a new piece</Link>
-          <Link className="btn btn-ghost btn-small" to="/welcome">Back to my library</Link>
+          <Link className="btn btn-ghost btn-small" to="/welcome">Back to my page</Link>
         </>
       }
     />

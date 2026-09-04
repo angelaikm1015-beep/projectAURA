@@ -51,7 +51,7 @@ export default function LoginPage() {
       // ends with the tab.
       await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
       await signInWithEmailAndPassword(auth, normalizeEmail(email), password);
-      navigate("/welcome", { replace: true });
+      navigate("/compose", { replace: true });
     } catch (error) {
       setMessage({ text: describeAuthError(error), kind: "error" });
       setPassword("");

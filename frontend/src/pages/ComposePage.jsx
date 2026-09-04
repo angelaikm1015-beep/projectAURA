@@ -20,7 +20,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { BrandHeader, FormMessage, SubmitButton } from "../components/chrome";
+import { AppHeader, PageIntro } from "../components/app-header";
+import { FormMessage, SubmitButton } from "../components/chrome";
 import { ChoiceCards, SelectField, TextAreaField } from "../components/fields";
 import { InstrumentPicker, totalParts } from "../components/instrument-picker";
 import { ScoreView } from "../components/score-view";
@@ -195,12 +196,14 @@ export default function ComposePage() {
     navigate("/login", { replace: true });
   }
 
-  const accountNav = (
+  // The score reader is full-screen and has no room for the top bar, so the
+  // same destinations ride along in its rail instead.
+  const railNav = (
     <nav className="compose-nav">
-      <Link className="link" to="/welcome">My library</Link>
+      <Link className="link" to="/welcome">My page</Link>
       <Link className="link" to="/gallery">Gallery</Link>
       <button type="button" className="link link-button" onClick={handleLogout}>
-        Log out {user ? `(${user.email})` : ""}
+        Log out
       </button>
     </nav>
   );
@@ -220,17 +223,18 @@ export default function ComposePage() {
         saving={sharing}
         onRegenerate={() => runCompose(payload())}
         onNewBrief={() => { setScore(null); setMessage(null); }}
-        nav={accountNav}
+        nav={railNav}
       />
     );
   }
 
   return (
     <div className="compose-page">
-      <header className="compose-top">
-        <BrandHeader tagline="Describe your ensemble. We'll write the music." />
-        {accountNav}
-      </header>
+      <AppHeader />
+      <PageIntro title="Write a new piece">
+        Describe your ensemble and we'll write the music. Every piece is saved to
+        your library automatically.
+      </PageIntro>
 
       <form className="form compose-form" onSubmit={handleSubmit} noValidate>
         <FormMessage text={message?.text} kind={message?.kind} />

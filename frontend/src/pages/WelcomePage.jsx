@@ -10,7 +10,8 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { AuthCard, BrandHeader, FormMessage } from "../components/chrome";
+import { AppHeader, PageIntro } from "../components/app-header";
+import { AuthCard, FormMessage } from "../components/chrome";
 import { ScoreCard } from "../components/score-card";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -109,9 +110,12 @@ export default function WelcomePage() {
 
   return (
     <div className="library-page">
-      <AuthCard>
-        <BrandHeader tagline={user ? `Signed in as ${user.email}` : "Loading your profile…"} />
+      <AppHeader />
+      <PageIntro title="My page">
+        {user ? `Signed in as ${user.email}` : "Loading your profile…"}
+      </PageIntro>
 
+      <AuthCard>
         <FormMessage text={error} />
 
         <ul className="profile-list">
@@ -124,16 +128,8 @@ export default function WelcomePage() {
         </ul>
 
         <Link className="btn" to="/compose">
-          Create sheet music
+          Write a new piece
         </Link>
-
-        <Link className="btn btn-ghost" to="/gallery">
-          Browse the gallery
-        </Link>
-
-        <button type="button" className="btn btn-ghost" onClick={handleLogout}>
-          Log out
-        </button>
       </AuthCard>
 
       <section className="library">

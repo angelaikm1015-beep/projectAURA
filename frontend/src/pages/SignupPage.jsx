@@ -123,7 +123,7 @@ export default function SignupPage() {
     try {
       await setPersistence(auth, browserLocalPersistence);
       await signInWithEmailAndPassword(auth, email, values.password);
-      navigate("/welcome", { replace: true });
+      navigate("/compose", { replace: true });
     } catch (error) {
       console.warn("Auto sign-in after signup failed:", describeAuthError(error));
       navigate("/login", { replace: true, state: { email } });
