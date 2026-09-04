@@ -24,6 +24,11 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from firebase import db
 
 SCORES_COLLECTION = "scores"
+# One document per (user, piece): whether they liked it, whether they saved it.
+# Both live together because they are the same shape of fact and a reader
+# usually wants both at once.
+REACTIONS_COLLECTION = "reactions"
+COMMENTS_SUBCOLLECTION = "comments"
 
 PRIVATE = "private"
 PUBLIC = "public"
@@ -39,6 +44,7 @@ SUMMARY_FIELDS = (
 )
 
 CAPTION_MAX = 600
+COMMENT_MAX = 500
 
 
 class LibraryError(Exception):
@@ -68,6 +74,8 @@ def save(uid: str, owner_name: str, score: dict, brief: dict) -> str:
                                                  "timeSignature", "concertKey",
                                                  "measureCount", "programNote")},
         "partCount": len(score.get("parts") or []),
+        "likeCount": 0,
+        "commentCount": 0,
     })
     return doc_ref.id
 
@@ -82,6 +90,10 @@ def _summary(snapshot) -> dict:
         "sharedAt": shared.isoformat() if hasattr(shared, "isoformat") else None,
         "partCount": data.get("partCount", 0),
         "canUndo": bool(data.get("previousScore")),
+        "likeCount": data.get("likeCount", 0),
+        "commentCount": data.get("commentCount", 0),
+        "level": (data.get("brief") or {}).get("level"),
+        "ensembleGroup": (data.get("brief") or {}).get("ensembleGroup"),
         "instruments": _instrument_summary(data),
         **{field: data.get(field) for field in SUMMARY_FIELDS},
     }
@@ -115,15 +127,198 @@ def _mine(uid: str):
 
 def list_for_user(uid: str) -> list:
     """Everything this user has generated, newest first."""
-    query = _mine(uid)
-    return _newest_first([_summary(doc) for doc in query.stream()])
+    return _newest_first([_summary(doc) for doc in _mine(uid).stream()])
 
 
-def list_public(limit: int = 100) -> list:
-    """The feed — every piece anyone has shared, most recently shared first."""
+def list_public(uid: str | None = None, level: str | None = None,
+                ensemble: str | None = None, limit: int = 100) -> dict:
+    """The feed — every shared piece, most recently posted first.
+
+    Filtering happens here rather than in the query for the same reason the
+    sort does: a `where` on two fields plus an order needs a composite index
+    built by hand, and the gallery is small enough that this costs nothing.
+    """
     query = db().collection(SCORES_COLLECTION).where(
         filter=FieldFilter("visibility", "==", PUBLIC))
-    return _newest_first([_summary(doc) for doc in query.stream()], "sharedAt")[:limit]
+    everything = _newest_first([_summary(doc) for doc in query.stream()], "sharedAt")
+    rows = [row for row in everything if _matches(row, level, ensemble)][:limit]
+    return {"scores": _with_reactions(uid, rows), "facets": _facets(everything),
+            "total": len(everything)}
+
+
+# ---------------------------------------------------------------------------
+# Filtering the feed
+# ---------------------------------------------------------------------------
+
+def _matches(row: dict, level: str | None, ensemble: str | None) -> bool:
+    return ((not level or row.get("level") == level)
+            and (not ensemble or row.get("ensembleGroup") == ensemble))
+
+
+def _facets(rows: list) -> dict:
+    """How many shared pieces sit in each category.
+
+    Sent with the feed so the filter can show counts and grey out the choices
+    that would come back empty — a filter that leads to nothing is worse than
+    no filter at all.
+    """
+    levels, ensembles = {}, {}
+    for row in rows:
+        if row.get("level"):
+            levels[row["level"]] = levels.get(row["level"], 0) + 1
+        if row.get("ensembleGroup"):
+            ensembles[row["ensembleGroup"]] = ensembles.get(row["ensembleGroup"], 0) + 1
+    return {"levels": levels, "ensembleGroups": ensembles}
+
+
+# ---------------------------------------------------------------------------
+# Likes, saves and comments
+# ---------------------------------------------------------------------------
+
+def _reaction_ref(uid: str, score_id: str):
+    # A composite id keeps it to one document per person per piece, so a like
+    # can never be double-counted by a double click.
+    return db().collection(REACTIONS_COLLECTION).document(f"{uid}__{score_id}")
+
+
+def reactions_for(uid: str, score_ids: list) -> dict:
+    """{scoreId: {liked, saved}} for the pieces on screen."""
+    if not uid or not score_ids:
+        return {}
+    refs = [_reaction_ref(uid, score_id) for score_id in score_ids]
+    found = {}
+    # get_all is one round trip however many pieces are listed.
+    for snapshot in db().get_all(refs):
+        if not snapshot.exists:
+            continue
+        data = snapshot.to_dict() or {}
+        found[data.get("scoreId")] = {"liked": bool(data.get("liked")),
+                                      "saved": bool(data.get("saved"))}
+    return found
+
+
+def _with_reactions(uid: str, rows: list) -> list:
+    mine = reactions_for(uid, [row["id"] for row in rows])
+    return [{**row, **mine.get(row["id"], {"liked": False, "saved": False})} for row in rows]
+
+
+def _toggle(uid: str, score_id: str, field: str) -> dict:
+    """Flip `liked` or `saved`, and keep the piece's counter honest."""
+    get(score_id, uid)  # 404s unless the reader may see it at all
+
+    ref = _reaction_ref(uid, score_id)
+    snapshot = ref.get()
+    current = (snapshot.to_dict() or {}) if snapshot.exists else {}
+    now_on = not current.get(field)
+
+    ref.set({**current, "uid": uid, "scoreId": score_id, field: now_on,
+             "updatedAt": firestore.SERVER_TIMESTAMP}, merge=True)
+
+    if field == "liked":
+        db().collection(SCORES_COLLECTION).document(score_id).update(
+            {"likeCount": firestore.Increment(1 if now_on else -1)})
+
+    return {field: now_on}
+
+
+def toggle_like(uid: str, score_id: str) -> dict:
+    result = _toggle(uid, score_id, "liked")
+    snapshot = db().collection(SCORES_COLLECTION).document(score_id).get()
+    return {**result, "likeCount": max(0, (snapshot.to_dict() or {}).get("likeCount", 0))}
+
+
+def toggle_save(uid: str, score_id: str) -> dict:
+    return _toggle(uid, score_id, "saved")
+
+
+def _reacted(uid: str, field: str) -> list:
+    """The pieces this user liked, or saved — whichever `field` names."""
+    query = (db().collection(REACTIONS_COLLECTION)
+             .where(filter=FieldFilter("uid", "==", uid))
+             .where(filter=FieldFilter(field, "==", True)))
+    ids = [(doc.to_dict() or {}).get("scoreId") for doc in query.stream()]
+    ids = [score_id for score_id in ids if score_id]
+    if not ids:
+        return []
+
+    refs = [db().collection(SCORES_COLLECTION).document(score_id) for score_id in ids]
+    rows = []
+    for snapshot in db().get_all(refs):
+        if not snapshot.exists:
+            continue
+        data = snapshot.to_dict() or {}
+        # A piece that has since been made private is no longer readable, unless
+        # it was yours all along.
+        if data.get("visibility") != PUBLIC and data.get("uid") != uid:
+            continue
+        rows.append(_summary(snapshot))
+    return _with_reactions(uid, _newest_first(rows, "sharedAt"))
+
+
+def list_liked(uid: str) -> list:
+    return _reacted(uid, "liked")
+
+
+def list_saved(uid: str) -> list:
+    return _reacted(uid, "saved")
+
+
+def list_comments(score_id: str, uid: str) -> list:
+    """Oldest first, the way a conversation reads."""
+    get(score_id, uid)  # visibility check
+    docs = (db().collection(SCORES_COLLECTION).document(score_id)
+            .collection(COMMENTS_SUBCOLLECTION).stream())
+    rows = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        created = data.get("createdAt")
+        rows.append({
+            "id": doc.id,
+            "uid": data.get("uid"),
+            "authorName": data.get("authorName"),
+            "text": data.get("text"),
+            "createdAt": created.isoformat() if hasattr(created, "isoformat") else None,
+            "mine": data.get("uid") == uid,
+        })
+    return sorted(rows, key=lambda row: row.get("createdAt") or "")
+
+
+def add_comment(uid: str, author_name: str, score_id: str, text: str) -> dict:
+    if not isinstance(text, str):
+        raise LibraryError("A comment has to be text.")
+    text = text.strip()
+    if not text:
+        raise LibraryError("Write something first.")
+    if len(text) > COMMENT_MAX:
+        raise LibraryError(f"Keep comments under {COMMENT_MAX} characters.")
+
+    get(score_id, uid)  # visibility check
+    score_ref = db().collection(SCORES_COLLECTION).document(score_id)
+    score_ref.collection(COMMENTS_SUBCOLLECTION).add({
+        "uid": uid, "authorName": author_name, "text": text,
+        "createdAt": firestore.SERVER_TIMESTAMP,
+    })
+    score_ref.update({"commentCount": firestore.Increment(1)})
+    return {"comments": list_comments(score_id, uid)}
+
+
+def delete_comment(uid: str, score_id: str, comment_id: str) -> dict:
+    """Your own comment, or any comment on your own piece."""
+    score_ref = db().collection(SCORES_COLLECTION).document(score_id)
+    score = score_ref.get()
+    comment_ref = score_ref.collection(COMMENTS_SUBCOLLECTION).document(comment_id)
+    comment = comment_ref.get()
+    if not comment.exists:
+        raise LibraryError("That comment is already gone.", 404)
+
+    owns_comment = (comment.to_dict() or {}).get("uid") == uid
+    owns_piece = (score.to_dict() or {}).get("uid") == uid
+    if not (owns_comment or owns_piece):
+        raise LibraryError("You can only delete your own comments.", 403)
+
+    comment_ref.delete()
+    score_ref.update({"commentCount": firestore.Increment(-1)})
+    return {"comments": list_comments(score_id, uid)}
 
 
 def get(score_id: str, uid: str | None) -> dict:

@@ -209,8 +209,53 @@ def register_routes(app: Flask) -> None:
     @app.get("/api/gallery")
     @require_auth
     def gallery():
-        """Every piece anyone has chosen to share."""
-        return jsonify({"scores": library.list_public()})
+        """The community feed, optionally narrowed to one level or ensemble.
+
+        Comes back with facet counts as well as the pieces, so the filter can
+        show how many sit behind each choice.
+        """
+        return jsonify(library.list_public(
+            uid=g.uid,
+            level=request.args.get("level") or None,
+            ensemble=request.args.get("ensemble") or None,
+        ))
+
+    @app.get("/api/me/likes")
+    @require_auth
+    def my_likes():
+        return jsonify({"scores": library.list_liked(g.uid)})
+
+    @app.get("/api/me/saves")
+    @require_auth
+    def my_saves():
+        return jsonify({"scores": library.list_saved(g.uid)})
+
+    @app.post("/api/scores/<score_id>/like")
+    @require_auth
+    def like_score(score_id):
+        return jsonify(library.toggle_like(g.uid, score_id))
+
+    @app.post("/api/scores/<score_id>/save")
+    @require_auth
+    def save_score(score_id):
+        return jsonify(library.toggle_save(g.uid, score_id))
+
+    @app.get("/api/scores/<score_id>/comments")
+    @require_auth
+    def get_comments(score_id):
+        return jsonify({"comments": library.list_comments(score_id, g.uid)})
+
+    @app.post("/api/scores/<score_id>/comments")
+    @require_auth
+    def add_comment(score_id):
+        data = request.get_json(silent=True) or {}
+        return jsonify(library.add_comment(
+            g.uid, _display_name(), score_id, data.get("text")))
+
+    @app.delete("/api/scores/<score_id>/comments/<comment_id>")
+    @require_auth
+    def remove_comment(score_id, comment_id):
+        return jsonify(library.delete_comment(g.uid, score_id, comment_id))
 
     @app.get("/api/scores/<score_id>")
     @require_auth

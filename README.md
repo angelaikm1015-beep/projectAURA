@@ -106,7 +106,20 @@ firebase deploy --only firestore:rules
 | `POST` | `/api/scores/<id>/revise` | Bearer | Change one thing about a piece in plain language, keeping the rest (owner only) |
 | `POST` | `/api/scores/<id>/undo` | Bearer | Restore the version from before the last revision (owner only) |
 | `DELETE` | `/api/scores/<id>` | Bearer | Delete one piece for good (owner only) |
-| `GET` | `/api/gallery` | Bearer | The community feed — every shared piece with its caption, most recently posted first |
+| `GET` | `/api/gallery` | Bearer | The community feed, newest post first. `?level=` and `?ensemble=` narrow it; the reply carries facet counts for the filter UI |
+| `GET` | `/api/me/likes` | Bearer | Pieces this user liked |
+| `GET` | `/api/me/saves` | Bearer | Pieces this user saved for later |
+| `POST` | `/api/scores/<id>/like` | Bearer | Toggle a like; returns the new count |
+| `POST` | `/api/scores/<id>/save` | Bearer | Toggle a save (private to the saver) |
+| `GET` | `/api/scores/<id>/comments` | Bearer | Comments on a piece, oldest first |
+| `POST` | `/api/scores/<id>/comments` | Bearer | Add a comment |
+| `DELETE` | `/api/scores/<id>/comments/<commentId>` | Bearer | Remove your own comment, or any on your own piece |
+
+Likes, saves and comments all check first that the piece is visible to the
+reader, so a private piece can be neither liked nor commented on by a stranger.
+Filtering and sorting happen in Python rather than in the query, because a
+`where` on two fields plus an order needs a composite Firestore index built by
+hand — fine at gallery scale, worth revisiting if it grows.
 
 A revision is an edit, not a regeneration: the model is handed the lines it
 already wrote and returns only the parts it needed to touch, so asking to fix

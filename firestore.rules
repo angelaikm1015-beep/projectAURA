@@ -19,6 +19,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Likes, saves and comments go through the Flask API too, which checks the
+    // piece is visible to the reader before it writes anything.
+    match /reactions/{reactionId} {
+      allow read, write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

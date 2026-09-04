@@ -75,8 +75,38 @@ export const compose = (payload) =>
 /** Everything the signed-in user has generated, newest first. */
 export const fetchMyScores = () => request("/api/scores", { authenticated: true });
 
-/** Every piece anyone has shared. */
-export const fetchGallery = () => request("/api/gallery", { authenticated: true });
+/**
+ * The community feed, optionally narrowed. Comes back as
+ * `{ scores, facets, total }` — the facets are how many shared pieces sit
+ * behind each filter choice, so the UI can show counts.
+ */
+export const fetchGallery = ({ level, ensemble } = {}) => {
+  const query = new URLSearchParams();
+  if (level) query.set("level", level);
+  if (ensemble) query.set("ensemble", ensemble);
+  const suffix = query.toString() ? `?${query}` : "";
+  return request(`/api/gallery${suffix}`, { authenticated: true });
+};
+
+/** Pieces this user has liked, or saved for later. */
+export const fetchLiked = () => request("/api/me/likes", { authenticated: true });
+export const fetchSaved = () => request("/api/me/saves", { authenticated: true });
+
+/** Toggles. Liking returns the new count; saving is private to you. */
+export const toggleLike = (id) =>
+  request(`/api/scores/${id}/like`, { method: "POST", authenticated: true });
+
+export const toggleSave = (id) =>
+  request(`/api/scores/${id}/save`, { method: "POST", authenticated: true });
+
+export const fetchComments = (id) =>
+  request(`/api/scores/${id}/comments`, { authenticated: true });
+
+export const addComment = (id, text) =>
+  request(`/api/scores/${id}/comments`, { method: "POST", body: { text }, authenticated: true });
+
+export const deleteComment = (id, commentId) =>
+  request(`/api/scores/${id}/comments/${commentId}`, { method: "DELETE", authenticated: true });
 
 /** One saved score in full — yours, or anyone's shared piece. */
 export const fetchScore = (id) => request(`/api/scores/${id}`, { authenticated: true });
