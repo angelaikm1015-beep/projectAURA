@@ -188,14 +188,17 @@ function voiceIndexesByPart(abc) {
 }
 
 /*
- * Play / stop, and a fader for every player.
+ * Playback, and which players are sounding.
  *
  * Muting is applied when the audio is built, not while it runs, so changing the
  * mix mid-piece means rebuilding it: the position is remembered, the parts are
  * re-rendered, and playback resumes where it was. That costs a moment on a long
  * score, which is why the button says so rather than appearing to hang.
+ *
+ * The mix lives here rather than in the mixer component so that the buttons and
+ * the sound can never disagree — one place decides who is playing.
  */
-function Player({ tune, abc, parts, showMixer }) {
+function usePlayer(tune, abc) {
   const synthRef = useRef(null);
   const [state, setState] = useState("idle"); // idle | loading | playing | error
   const [muted, setMuted] = useState(() => new Set());
@@ -216,17 +219,15 @@ function Player({ tune, abc, parts, showMixer }) {
     setMuted(new Set());
   }, [tune]);
 
-  const voicesOff = (silenced) =>
-    [...silenced].flatMap((partId) => voicesByPart[partId] || []);
-
   async function build(silenced, startAtSec) {
     // The AudioContext has to be created inside the click, or browsers will
     // refuse to start it.
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     await audioContext.resume();
 
+    const voicesOff = [...silenced].flatMap((partId) => voicesByPart[partId] || []);
     const synth = new abcjs.synth.CreateSynth();
-    await synth.init({ audioContext, visualObj: tune, options: { voicesOff: voicesOff(silenced) } });
+    await synth.init({ audioContext, visualObj: tune, options: { voicesOff } });
     await synth.prime();
     synthRef.current = synth;
     if (startAtSec) synth.seek(startAtSec, "seconds");
@@ -250,11 +251,9 @@ function Player({ tune, abc, parts, showMixer }) {
     }
   }
 
-  async function toggleMute(partId) {
-    const next = new Set(muted);
-    if (next.has(partId)) next.delete(partId); else next.add(partId);
+  /** Change who is sounding. Takes effect immediately if it is already playing. */
+  async function setMix(next) {
     setMuted(next);
-
     if (state !== "playing" || !synthRef.current) return;
 
     // Keep the place. pause() hands back how far in we are.
@@ -269,71 +268,128 @@ function Player({ tune, abc, parts, showMixer }) {
     }
   }
 
-  if (!supported) return null;
+  return { state, supported, toggle, muted, setMix };
+}
+
+function PlayButton({ player, disabled }) {
+  if (!player.supported) return null;
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-small"
+      onClick={player.toggle}
+      disabled={disabled || player.state === "loading"}
+    >
+      {player.state === "loading" ? "Mixing…"
+        : player.state === "playing" ? "■ Stop"
+        : player.state === "error" ? "Playback unavailable"
+        : "▶ Play"}
+    </button>
+  );
+}
+
+/*
+ * A speaker per player, sitting on top of the score it belongs to.
+ *
+ * Listening to a full score as one wall of sound tells you very little. What
+ * you actually want is to take the flute out and hear what is left, or start
+ * from one line and stack the others back on. So every part gets a speaker you
+ * can click, and "Only this" gets you to a single line in one press instead of
+ * muting the other eleven by hand.
+ */
+/* Drawn rather than an emoji: 🔊 and 🔇 are nearly identical in some system
+   fonts and absent in others, and this is the one control that has to read
+   correctly at a glance. */
+function SpeakerIcon({ off }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="mixer__icon">
+      <path d="M4 9.5h3.2L12 5.4v13.2L7.2 14.5H4z" />
+      {off ? (
+        <path className="mixer__icon-mark" d="M15.5 9.5l5 5m0-5l-5 5" />
+      ) : (
+        <>
+          <path className="mixer__icon-wave" d="M15.8 9.2a4 4 0 0 1 0 5.6" />
+          <path className="mixer__icon-wave" d="M18.4 6.8a7.5 7.5 0 0 1 0 10.4" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function Mixer({ parts, player }) {
+  if (!player.supported || parts.length < 2) return null;
+
+  const { muted, setMix } = player;
+  const on = parts.length - muted.size;
+
+  const toggle = (partId) => {
+    const next = new Set(muted);
+    if (next.has(partId)) next.delete(partId); else next.add(partId);
+    setMix(next);
+  };
+
+  const solo = (partId) => {
+    const alone = muted.size === parts.length - 1 && !muted.has(partId);
+    // Clicking "Only this" on the part that is already alone puts everyone back.
+    setMix(alone ? new Set() : new Set(parts.filter((p) => p.partId !== partId).map((p) => p.partId)));
+  };
 
   return (
-    <>
-      <button
-        type="button"
-        className="btn btn-ghost btn-small"
-        onClick={toggle}
-        disabled={!tune || state === "loading"}
-      >
-        {state === "loading" ? "Loading sounds…"
-          : state === "playing" ? "■ Stop"
-          : state === "error" ? "Playback unavailable"
-          : "▶ Play"}
-      </button>
+    <section className="mixer" aria-label="Instruments you can hear">
+      <div className="mixer__head">
+        <h3 className="mixer__title">Who you're hearing</h3>
+        <p className="mixer__count">{on} of {parts.length} playing</p>
+        <div className="mixer__all">
+          <button type="button" className="btn btn-ghost btn-small"
+            onClick={() => setMix(new Set())} disabled={muted.size === 0}>
+            All on
+          </button>
+          <button type="button" className="btn btn-ghost btn-small"
+            onClick={() => setMix(new Set(parts.map((p) => p.partId)))}
+            disabled={muted.size === parts.length}>
+            All off
+          </button>
+        </div>
+      </div>
 
-      {showMixer && parts.length > 1 && (
-        <details className="mixer">
-          <summary>
-            Instruments
-            {muted.size > 0 && <span className="mixer__count">{muted.size} off</span>}
-          </summary>
-          <p className="mixer__hint">
-            Turn a part off to hear the piece without it. Changing this while it plays
-            takes a moment to re-mix.
-          </p>
-          <ul className="mixer__list">
-            {parts.map((part) => {
-              const off = muted.has(part.partId);
-              return (
-                <li key={part.partId}>
-                  <button
-                    type="button"
-                    className={`mixer__part${off ? " is-off" : ""}`}
-                    aria-pressed={!off}
-                    onClick={() => toggleMute(part.partId)}
-                  >
-                    <span className="mixer__icon" aria-hidden="true">{off ? "🔇" : "🔊"}</span>
-                    {part.label}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          <div className="mixer__all">
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              onClick={() => setMuted(new Set())}
-              disabled={muted.size === 0}
-            >
-              All on
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-small"
-              onClick={() => setMuted(new Set(parts.map((part) => part.partId)))}
-              disabled={muted.size === parts.length}
-            >
-              All off
-            </button>
-          </div>
-        </details>
-      )}
-    </>
+      <ul className="mixer__list">
+        {parts.map((part) => {
+          const off = muted.has(part.partId);
+          const alone = !off && muted.size === parts.length - 1;
+          return (
+            <li key={part.partId} className={`mixer__row${off ? " is-off" : ""}`}>
+              <button
+                type="button"
+                className="mixer__speaker"
+                aria-pressed={!off}
+                aria-label={`${off ? "Turn on" : "Turn off"} ${part.label}`}
+                title={off ? `Turn on ${part.label}` : `Mute ${part.label}`}
+                onClick={() => toggle(part.partId)}
+              >
+                <SpeakerIcon off={off} />
+              </button>
+
+              <span className="mixer__label">{part.label}</span>
+
+              <button
+                type="button"
+                className={`mixer__solo${alone ? " is-active" : ""}`}
+                onClick={() => solo(part.partId)}
+                title={alone ? "Bring everyone back" : `Hear only ${part.label}`}
+              >
+                {alone ? "All back" : "Only this"}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="mixer__hint">
+        {player.state === "playing"
+          ? "Changing the mix while it plays takes a moment to re-mix."
+          : "Set the mix, then press Play — or change it while it's playing."}
+      </p>
+    </section>
   );
 }
 
@@ -559,6 +615,7 @@ export function ScoreView({
   ];
 
   const active = sheets.find((sheet) => sheet.id === activeId) || sheets[0];
+  const player = usePlayer(tune, active.abc);
   const base = slug(score.title);
   const fileBase = active.id === "full" || active.id === "conductor"
     ? `${base}-full-score`
@@ -675,12 +732,7 @@ export function ScoreView({
 
           <div className="score-bar__tools">
             <div className="score-tools">
-              <Player
-                tune={tune}
-                abc={active.abc}
-                parts={score.parts}
-                showMixer={active.nameEveryLine}
-              />
+              <PlayButton player={player} disabled={!tune} />
               <button type="button" className="btn btn-ghost btn-small" onClick={() => window.print()}>
                 Print / save PDF
               </button>
@@ -734,6 +786,8 @@ export function ScoreView({
         )}
 
         {active.note && <p className="score-partnote">{active.note}</p>}
+
+        {active.nameEveryLine && <Mixer parts={score.parts} player={player} />}
 
         <div className="printable">
           <Sheet

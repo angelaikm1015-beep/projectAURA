@@ -1133,69 +1133,123 @@ textarea:focus {
 
 /* ---------- the mixer ---------- */
 
+/* Sits directly above the paper, always open. Hiding it behind a disclosure
+   made the one control people actually want the hardest thing to find. */
 .mixer {
-  width: 100%;
-  padding: 10px 13px;
-  background: var(--field);
-  border: 1px solid var(--field-border);
+  max-width: 1400px;
+  margin: 0 auto 14px;
+  padding: 15px 18px 13px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
   border-radius: var(--radius);
-  font-size: 0.82rem;
+  backdrop-filter: blur(18px);
 }
 
-.mixer > summary {
+.mixer__head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  list-style: none;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 12px;
 }
 
-.mixer > summary::-webkit-details-marker { display: none; }
-.mixer > summary::before { content: "▸"; color: var(--text-faint); font-size: 0.75rem; }
-.mixer[open] > summary::before { content: "▾"; }
+.mixer__title { margin: 0; font-size: 0.92rem; font-weight: 700; }
 
-.mixer__count {
-  padding: 2px 8px;
-  font-size: 0.66rem;
-  font-weight: 700;
-  color: var(--warn);
-  background: rgba(251, 191, 36, 0.14);
-  border-radius: 999px;
-}
+.mixer__count { margin: 0; margin-right: auto; font-size: 0.74rem; color: var(--text-faint); }
 
-.mixer__hint { margin: 10px 0 0; font-size: 0.72rem; line-height: 1.5; color: var(--text-faint); }
+.mixer__all { display: flex; gap: 8px; }
 
 .mixer__list {
   list-style: none;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 7px;
 }
 
-.mixer__part {
+.mixer__row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 7px 11px;
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-align: left;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+  gap: 10px;
+  padding: 7px 9px 7px 7px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 11px;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.mixer__row.is-off { opacity: 0.5; border-style: dashed; }
+
+.mixer__speaker {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--field-border);
   border-radius: 9px;
   cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
 }
 
-.mixer__part:hover { background: rgba(255, 255, 255, 0.08); }
-.mixer__part.is-off { color: var(--text-faint); opacity: 0.65; }
-.mixer__icon { font-size: 0.85rem; }
-.mixer__all { display: flex; gap: 8px; margin-top: 10px; }
+.mixer__speaker:hover { background: rgba(255, 255, 255, 0.12); }
+
+.mixer__icon { width: 19px; height: 19px; }
+.mixer__icon path { fill: currentColor; }
+
+.mixer__icon-wave,
+.mixer__icon-mark {
+  fill: none !important;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.mixer__row:not(.is-off) .mixer__speaker { color: var(--accent-2); }
+.mixer__row.is-off .mixer__speaker { color: var(--text-faint); }
+.mixer__speaker:active { transform: scale(0.94); }
+
+.mixer__row:not(.is-off) .mixer__speaker {
+  background: var(--accent-soft);
+  border-color: rgba(124, 92, 255, 0.4);
+}
+
+.mixer__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-right: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mixer__solo {
+  flex: none;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-faint);
+  background: none;
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.mixer__solo:hover { color: var(--text); border-color: var(--accent-2); }
+
+.mixer__solo.is-active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(100deg, var(--accent), var(--accent-2));
+}
+
+.mixer__hint { margin: 11px 0 0; font-size: 0.72rem; color: var(--text-faint); }
 
 /* ---------- dialog ---------- */
 
@@ -1717,6 +1771,7 @@ body:has(.score-shell) {
   .score-bar,
   .score-tabs,
   .score-pending,
+  .mixer,
   .score-warnings,
   .score-footnote { display: none !important; }
 
