@@ -409,6 +409,133 @@ a:focus-visible {
   border: 0;
 }
 
+/* ---------- top bar ---------- */
+
+/* One row, three groups: mark, destinations, account. Nothing is positioned
+   absolutely here, so no amount of text can make two of them overlap. */
+.topbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 20px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  backdrop-filter: blur(18px);
+}
+
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  flex: none;
+}
+
+.topbar__mark {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 6px 16px rgba(124, 92, 255, 0.35);
+}
+
+.topbar__mark svg { width: 17px; height: 17px; fill: #fff; }
+
+.topbar__name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+  background: linear-gradient(100deg, #fff, #b9a8ff 60%, var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.topbar__nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.topbar__link {
+  padding: 7px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-radius: 999px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.topbar__link:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+
+.topbar__link.is-active {
+  color: #fff;
+  background: linear-gradient(100deg, var(--accent), var(--accent-2));
+}
+
+.topbar__account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbar__who {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__logout {
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-dim);
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.topbar__logout:hover { color: var(--text); background: rgba(255, 255, 255, 0.07); }
+
+/* Narrow: the account drops to its own line rather than squeezing the nav. */
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; gap: 10px 14px; }
+  .topbar__nav { margin-right: 0; order: 3; width: 100%; justify-content: center; }
+  .topbar__account { margin-left: auto; }
+  .topbar__who { max-width: 46vw; }
+}
+
+.page-intro { width: 100%; }
+
+.page-intro__title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.page-intro__sub {
+  margin: 6px 0 0;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 62ch;
+}
+
 /* ---------- compose page ---------- */
 
 /* The compose page is a full page rather than a centred card: a full score is
@@ -423,7 +550,7 @@ body:has(.library-page),
   max-width: 1080px;
   display: flex;
   flex-direction: column;
-  gap: 26px;
+  gap: 22px;
 }
 
 .compose-top { position: relative; }
@@ -622,8 +749,10 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 34px;
+  gap: 22px;
 }
+
+.library-page > .library { margin-top: 12px; }
 
 .library { width: 100%; }
 

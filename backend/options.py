@@ -160,41 +160,54 @@ SKILL_LEVELS = [
     {
         "value": "beginner",
         "label": "Beginner",
-        "years": "5 months – 1 year",
-        "guidance": "Keys of C, G, F or D major only. Time in 4/4, 3/4 or 2/4 at a steady "
-                    "tempo. Whole, half, quarter and eighth notes only — no syncopation, "
-                    "no dotted-eighth rhythms, no ties across barlines. Stay inside the "
-                    "easy range at all times. Stepwise motion with leaps no wider than a "
-                    "fifth. Strings stay in first position; winds stay in the first octave "
-                    "they learn. Rests of a full bar or more so players can find their "
-                    "place. Two dynamic levels at most.",
+        "years": "under 1 year",
+        "guidance": "Keys of C, G, F or D major. Time in 4/4, 3/4 or 2/4 at a steady "
+                    "tempo. Whole, half, quarter and eighth notes, plus the "
+                    "dotted-quarter-eighth figure and simple ties. Stay inside the "
+                    "easy range. Stepwise motion with leaps up to a sixth. Strings "
+                    "stay in first position; winds stay in the first octave they "
+                    "learn. Whole-bar rests so players can find their place. Slurs, "
+                    "staccato and three dynamic levels are all fair — a first-year "
+                    "player can shape a phrase even if they cannot play fast.",
     },
     {
         "value": "intermediate",
         "label": "Intermediate",
-        "years": "2 – 3 years",
-        "guidance": "Up to three sharps or flats. Sixteenth-note passages at moderate "
-                    "tempo, dotted rhythms, simple syncopation and ties. Mostly the easy "
-                    "range with brief excursions above it. Leaps up to an octave. Strings "
-                    "may use third position; winds may cross the break. Slurs, staccato "
-                    "and a full dynamic range from p to f.",
+        "years": "1 – 3 years",
+        "guidance": "Up to four sharps or flats, and accidentals outside the key. "
+                    "Sustained sixteenth-note passages at a moderate tempo, dotted "
+                    "rhythms, triplets, syncopation and ties across barlines. One "
+                    "meter change is fine. Mostly the easy range, reaching into the "
+                    "full range at climaxes. Leaps up to an octave. Strings use third "
+                    "position and simple double stops; winds cross the break freely. "
+                    "Independent lines rather than constant doubling, short exposed "
+                    "entries, and the full articulation vocabulary from pp to ff.",
     },
     {
         "value": "higher-intermediate",
         "label": "Higher intermediate",
-        "years": "3 – 6 years",
-        "guidance": "Any key up to five accidentals, modal writing, occasional meter "
-                    "changes and triplets against duple. Full written range. Independent "
-                    "counterpoint rather than block doubling. Accents, tenuto, hairpins, "
-                    "double stops for strings, and short exposed solo lines.",
+        "years": "4 – 7 years",
+        "guidance": "An advanced player — a strong senior in a good high school "
+                    "programme, not a careful learner. Any key, up to six accidentals, "
+                    "modal and chromatic writing, and modulation to distant keys. "
+                    "Mixed and changing meter, cross-rhythm, triplets against duple, "
+                    "and fast sixteenth-note passagework that has to be practised. "
+                    "The full written range including the top of it. Real four-part "
+                    "counterpoint with genuinely independent lines, not melody over "
+                    "accompaniment. Extended solo lines, double stops and divisi for "
+                    "strings, and chromatic harmony — secondary dominants, borrowed "
+                    "chords, diminished passing chords. Everything articulated and "
+                    "dynamically shaped throughout.",
     },
     {
         "value": "pro",
         "label": "Pro",
-        "years": "7 – 10 years",
-        "guidance": "No restrictions. Chromaticism, mixed meter, rubato, virtuosic runs, "
-                    "extremes of range and dynamic, and genuinely independent voices. "
-                    "Write as you would for paid players.",
+        "years": "8+ years",
+        "guidance": "No restrictions, and no caution. Chromaticism and modulation as "
+                    "the music wants them, mixed meter, rubato, virtuosic runs, "
+                    "extremes of range and dynamic, and genuinely independent voices "
+                    "throughout. Write as you would for paid players who will read it "
+                    "once and perform it.",
     },
 ]
 
