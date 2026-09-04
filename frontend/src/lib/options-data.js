@@ -549,287 +549,369 @@ export const OPTIONS = {
       "maxParts": 4,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 40,
+      "easy": "G3-D5"
     },
     "Viola": {
       "clef": "alto",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 41,
+      "easy": "C3-A4"
     },
     "Cello": {
       "clef": "bass",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 42,
+      "easy": "C2-A3"
     },
     "Double bass": {
       "clef": "bass",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": -12
+      "transpose": -12,
+      "midi": 43,
+      "easy": "E2-G3"
     },
     "Harp": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 46,
+      "easy": "C3-C6"
     },
     "Acoustic guitar": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": -12
+      "transpose": -12,
+      "midi": 24,
+      "easy": "E3-G5"
     },
     "Electric guitar": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": -12
+      "transpose": -12,
+      "midi": 27,
+      "easy": "E3-G5"
     },
     "Bass guitar": {
       "clef": "bass",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": -12
+      "transpose": -12,
+      "midi": 33,
+      "easy": "E2-G3"
     },
     "Ukulele": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 24,
+      "easy": "C4-A5"
     },
     "Flute": {
       "clef": "treble",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 73,
+      "easy": "C4-G5"
     },
     "Piccolo": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": 12
+      "transpose": 12,
+      "midi": 72,
+      "easy": "D4-G5"
     },
     "Clarinet": {
       "clef": "treble",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": -2
+      "transpose": -2,
+      "midi": 71,
+      "easy": "E3-C5"
     },
     "Bass clarinet": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": -14
+      "transpose": -14,
+      "midi": 71,
+      "easy": "E3-C5"
     },
     "Oboe": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 68,
+      "easy": "C4-D5"
     },
     "English horn": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": -7
+      "transpose": -7,
+      "midi": 69,
+      "easy": "D4-D5"
     },
     "Bassoon": {
       "clef": "bass",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 70,
+      "easy": "F2-C4"
     },
     "Alto saxophone": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": -9
+      "transpose": -9,
+      "midi": 65,
+      "easy": "C4-C5"
     },
     "Tenor saxophone": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": -14
+      "transpose": -14,
+      "midi": 66,
+      "easy": "C4-C5"
     },
     "Baritone saxophone": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": -21
+      "transpose": -21,
+      "midi": 67,
+      "easy": "C4-C5"
     },
     "Recorder": {
       "clef": "treble",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": 12
+      "transpose": 12,
+      "midi": 74,
+      "easy": "C4-D5"
     },
     "Trumpet": {
       "clef": "treble",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": -2
+      "transpose": -2,
+      "midi": 56,
+      "easy": "G3-D5"
     },
     "French horn": {
       "clef": "treble",
       "maxParts": 4,
       "staves": 1,
       "pitched": true,
-      "transpose": -7
+      "transpose": -7,
+      "midi": 60,
+      "easy": "G3-D5"
     },
     "Trombone": {
       "clef": "bass",
       "maxParts": 3,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 57,
+      "easy": "F2-Bb3"
     },
     "Euphonium": {
       "clef": "bass",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 58,
+      "easy": "F2-Bb3"
     },
     "Tuba": {
       "clef": "bass",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 58,
+      "easy": "F1-F3"
     },
     "Timpani": {
       "clef": "bass",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 47,
+      "easy": "F2-C4"
     },
     "Marimba": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 12,
+      "easy": "C4-C6"
     },
     "Xylophone": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": 12
+      "transpose": 12,
+      "midi": 13,
+      "easy": "C4-C6"
     },
     "Vibraphone": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 11,
+      "easy": "C4-C6"
     },
     "Snare drum": {
       "clef": "perc",
       "maxParts": 1,
       "staves": 1,
       "pitched": false,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 38,
+      "easy": "-"
     },
     "Drum set": {
       "clef": "perc",
       "maxParts": 1,
       "staves": 1,
       "pitched": false,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 0,
+      "easy": "-"
     },
     "Hand percussion": {
       "clef": "perc",
       "maxParts": 2,
       "staves": 1,
       "pitched": false,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 0,
+      "easy": "-"
     },
     "Piano": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 0,
+      "easy": "C3-C6"
     },
     "Organ": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 19,
+      "easy": "C3-C6"
     },
     "Harpsichord": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 6,
+      "easy": "C3-C6"
     },
     "Synthesizer": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 81,
+      "easy": "C3-C6"
     },
     "Accordion": {
       "clef": "treble",
       "maxParts": 1,
       "staves": 2,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 21,
+      "easy": "C3-C6"
     },
     "Soprano": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 52,
+      "easy": "D4-D5"
     },
     "Alto (voice)": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 52,
+      "easy": "A3-C5"
     },
     "Tenor (voice)": {
       "clef": "treble",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": -12
+      "transpose": -12,
+      "midi": 52,
+      "easy": "D4-D5"
     },
     "Bass (voice)": {
       "clef": "bass",
       "maxParts": 2,
       "staves": 1,
       "pitched": true,
-      "transpose": 0
+      "transpose": 0,
+      "midi": 52,
+      "easy": "A2-C4"
     }
   }
 };

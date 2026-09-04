@@ -199,7 +199,7 @@ Six answers become the brief:
 
 | Input | Effect on the music |
 | --- | --- |
-| **Instruments**, and how many of each | "Violin ×3" becomes Violin I, II and III — three *independent* lines, not one line tripled. Capped per instrument (a section divides, a drum set doesn't); the roster as a whole is uncapped, so a full orchestra is a legitimate ask. |
+| **Instruments**, and how many of each (browse and hear each one before adding it) | "Violin ×3" becomes Violin I, II and III — three *independent* lines, not one line tripled. Capped per instrument (a section divides, a drum set doesn't); the roster as a whole is uncapped, so a full orchestra is a legitimate ask. |
 | **Group** — middle school … professional | How much rehearsal time to assume, and how much doubling the parts need. |
 | **Level** — the four bands, by years played | Keys, rhythms, ranges, positions and technique. Writing above a group's level is the worst failure here, so this constrains hardest. |
 | **Mood** | The theme of the piece: it picks the key, tempo, register, articulation and harmony. |

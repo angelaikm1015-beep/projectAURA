@@ -15,7 +15,7 @@
  * paper looks like, and it is what comes out of the printer.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import abcjs from "abcjs";
 
 const slug = (text) =>
@@ -165,13 +165,45 @@ function Sheet({ abc, size, nameEveryLine = true, onTune }) {
   return <div className="sheet" ref={host} />;
 }
 
-/** Play / stop for the sheet on screen. */
-function PlaybackButton({ tune }) {
+/*
+ * Which voices belong to which player.
+ *
+ * abcjs silences parts by voice *index*, so the mixer needs the order the
+ * voices are declared in. That order is written into the ABC itself — the V:
+ * lines above the first K: — which makes it the one source that is right for
+ * every score, including ones saved before the mixer existed. A grand-staff
+ * instrument declares two voices (P9a, P9b) and both belong to the one player.
+ */
+function voiceIndexesByPart(abc) {
+  const header = String(abc || "").split(/^K:/m)[0];
+  const ids = [...header.matchAll(/^V:\s*(\S+)/gm)].map((match) => match[1]);
+
+  const byPart = {};
+  ids.forEach((id, index) => {
+    const partId = /^(.*?)[ab]?$/.exec(id)[1];
+    (byPart[partId] ||= []).push(index);
+    if (partId !== id) (byPart[id] ||= []).push(index);
+  });
+  return byPart;
+}
+
+/*
+ * Play / stop, and a fader for every player.
+ *
+ * Muting is applied when the audio is built, not while it runs, so changing the
+ * mix mid-piece means rebuilding it: the position is remembered, the parts are
+ * re-rendered, and playback resumes where it was. That costs a moment on a long
+ * score, which is why the button says so rather than appearing to hang.
+ */
+function Player({ tune, abc, parts, showMixer }) {
   const synthRef = useRef(null);
   const [state, setState] = useState("idle"); // idle | loading | playing | error
+  const [muted, setMuted] = useState(() => new Set());
   const supported = typeof abcjs.synth?.supportsAudio === "function" && abcjs.synth.supportsAudio();
 
-  // Never let a tune keep playing after the user switches to another part.
+  const voicesByPart = useMemo(() => voiceIndexesByPart(abc), [abc]);
+
+  // A different tune is a different mix; never let the old one keep playing.
   useEffect(() => {
     return () => {
       synthRef.current?.stop();
@@ -179,28 +211,38 @@ function PlaybackButton({ tune }) {
     };
   }, [tune]);
 
-  useEffect(() => setState("idle"), [tune]);
+  useEffect(() => {
+    setState("idle");
+    setMuted(new Set());
+  }, [tune]);
 
-  if (!supported) return null;
+  const voicesOff = (silenced) =>
+    [...silenced].flatMap((partId) => voicesByPart[partId] || []);
+
+  async function build(silenced, startAtSec) {
+    // The AudioContext has to be created inside the click, or browsers will
+    // refuse to start it.
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await audioContext.resume();
+
+    const synth = new abcjs.synth.CreateSynth();
+    await synth.init({ audioContext, visualObj: tune, options: { voicesOff: voicesOff(silenced) } });
+    await synth.prime();
+    synthRef.current = synth;
+    if (startAtSec) synth.seek(startAtSec, "seconds");
+    synth.start();
+  }
 
   async function toggle() {
     if (state === "playing") {
       synthRef.current?.stop();
+      synthRef.current = null;
       setState("idle");
       return;
     }
     setState("loading");
     try {
-      // The AudioContext has to be created inside the click, or browsers will
-      // refuse to start it.
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      await audioContext.resume();
-
-      const synth = new abcjs.synth.CreateSynth();
-      await synth.init({ audioContext, visualObj: tune });
-      await synth.prime();
-      synthRef.current = synth;
-      synth.start();
+      await build(muted, 0);
       setState("playing");
     } catch (error) {
       console.warn("Playback failed:", error);
@@ -208,13 +250,90 @@ function PlaybackButton({ tune }) {
     }
   }
 
+  async function toggleMute(partId) {
+    const next = new Set(muted);
+    if (next.has(partId)) next.delete(partId); else next.add(partId);
+    setMuted(next);
+
+    if (state !== "playing" || !synthRef.current) return;
+
+    // Keep the place. pause() hands back how far in we are.
+    const at = synthRef.current.pause();
+    setState("loading");
+    try {
+      await build(next, at);
+      setState("playing");
+    } catch (error) {
+      console.warn("Re-mixing failed:", error);
+      setState("error");
+    }
+  }
+
+  if (!supported) return null;
+
   return (
-    <button type="button" className="btn btn-ghost btn-small" onClick={toggle} disabled={!tune || state === "loading"}>
-      {state === "loading" ? "Loading sounds…"
-        : state === "playing" ? "■ Stop"
-        : state === "error" ? "Playback unavailable"
-        : "▶ Play"}
-    </button>
+    <>
+      <button
+        type="button"
+        className="btn btn-ghost btn-small"
+        onClick={toggle}
+        disabled={!tune || state === "loading"}
+      >
+        {state === "loading" ? "Loading sounds…"
+          : state === "playing" ? "■ Stop"
+          : state === "error" ? "Playback unavailable"
+          : "▶ Play"}
+      </button>
+
+      {showMixer && parts.length > 1 && (
+        <details className="mixer">
+          <summary>
+            Instruments
+            {muted.size > 0 && <span className="mixer__count">{muted.size} off</span>}
+          </summary>
+          <p className="mixer__hint">
+            Turn a part off to hear the piece without it. Changing this while it plays
+            takes a moment to re-mix.
+          </p>
+          <ul className="mixer__list">
+            {parts.map((part) => {
+              const off = muted.has(part.partId);
+              return (
+                <li key={part.partId}>
+                  <button
+                    type="button"
+                    className={`mixer__part${off ? " is-off" : ""}`}
+                    aria-pressed={!off}
+                    onClick={() => toggleMute(part.partId)}
+                  >
+                    <span className="mixer__icon" aria-hidden="true">{off ? "🔇" : "🔊"}</span>
+                    {part.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="mixer__all">
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => setMuted(new Set())}
+              disabled={muted.size === 0}
+            >
+              All on
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => setMuted(new Set(parts.map((part) => part.partId)))}
+              disabled={muted.size === parts.length}
+            >
+              All off
+            </button>
+          </div>
+        </details>
+      )}
+    </>
   );
 }
 
@@ -556,7 +675,12 @@ export function ScoreView({
 
           <div className="score-bar__tools">
             <div className="score-tools">
-              <PlaybackButton tune={tune} />
+              <Player
+                tune={tune}
+                abc={active.abc}
+                parts={score.parts}
+                showMixer={active.nameEveryLine}
+              />
               <button type="button" className="btn btn-ghost btn-small" onClick={() => window.print()}>
                 Print / save PDF
               </button>

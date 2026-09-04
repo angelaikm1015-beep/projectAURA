@@ -11,7 +11,10 @@
  * divide, a drum set can't) so the form can't ask for something the API rejects.
  */
 
-import { useId } from "react";
+import { useId, useState } from "react";
+
+import { InstrumentBrowser } from "./instrument-browser";
+import { previewInstrument, previewSupported, stopPreview } from "../lib/preview-audio";
 
 const ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
 
@@ -29,6 +32,24 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
   const generatedId = useId();
   const selectId = `${generatedId}-add`;
   const errorId = `${generatedId}-error`;
+  const [browsing, setBrowsing] = useState(false);
+  const [playing, setPlaying] = useState(null);
+  const canListen = previewSupported();
+
+  async function listen(name) {
+    if (playing === name) {
+      stopPreview();
+      setPlaying(null);
+      return;
+    }
+    setPlaying(name);
+    try {
+      await previewInstrument({ ...(info[name] || {}), name });
+    } catch (error) {
+      console.warn("Preview unavailable:", error);
+      setPlaying(null);
+    }
+  }
 
   const chosenNames = new Set(value.map((entry) => entry.name));
   const used = totalParts(value);
@@ -58,26 +79,32 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
     <div className="field">
       <span className="field-label" id={`${generatedId}-label`}>{label}</span>
 
-      <select
-        id={selectId}
-        aria-label="Add an instrument"
-        defaultValue=""
-        onChange={add}
-        disabled={!available.length}
-        aria-invalid={error ? "true" : undefined}
-        aria-describedby={error ? errorId : undefined}
-      >
-        <option value="" disabled>
-          {available.length ? "Add an instrument…" : "Every instrument is already on the list"}
-        </option>
-        {available.map((group) => (
-          <optgroup key={group.group} label={group.group}>
-            {group.options.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+      <div className="picker-row">
+        <select
+          id={selectId}
+          aria-label="Add an instrument"
+          defaultValue=""
+          onChange={add}
+          disabled={!available.length}
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={error ? errorId : undefined}
+        >
+          <option value="" disabled>
+            {available.length ? "Add an instrument…" : "Every instrument is already on the list"}
+          </option>
+          {available.map((group) => (
+            <optgroup key={group.group} label={group.group}>
+              {group.options.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+
+        <button type="button" className="btn btn-ghost btn-small" onClick={() => setBrowsing(true)}>
+          {canListen ? "Browse & listen" : "Browse all"}
+        </button>
+      </div>
 
       {value.length > 0 && (
         <ul className="roster">
@@ -88,6 +115,17 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
 
             return (
               <li className="roster__row" key={entry.name}>
+                {canListen && (
+                  <button
+                    type="button"
+                    className="browser__listen"
+                    onClick={() => listen(entry.name)}
+                    aria-label={`Hear the ${entry.name}`}
+                  >
+                    {playing === entry.name ? "■" : "▶"}
+                  </button>
+                )}
+
                 <div className="roster__main">
                   <span className="roster__name">{entry.name}</span>
                   <span className="roster__meta">
@@ -133,10 +171,20 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
 
       <p className="hint">
         {value.length === 0
-          ? "Pick every instrument that will be playing. Add the same instrument once, then set how many parts it splits into."
+          ? "Pick every instrument that will be playing — “Browse & listen” lets you hear each one first. Add the same instrument once, then set how many parts it splits into."
           : `${used} part${used === 1 ? "" : "s"}. Each part gets its own printed sheet.`}
       </p>
       {error && <p className="error" id={errorId}>{error}</p>}
+
+      {browsing && (
+        <InstrumentBrowser
+          groups={groups}
+          info={info}
+          value={value}
+          onChange={onChange}
+          onClose={() => setBrowsing(false)}
+        />
+      )}
     </div>
   );
 }

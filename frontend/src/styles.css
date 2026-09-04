@@ -1058,6 +1058,145 @@ textarea:focus {
   font-style: italic;
 }
 
+/* ---------- hearing the instruments ---------- */
+
+.picker-row { display: flex; gap: 8px; align-items: center; }
+.picker-row select { flex: 1; min-width: 0; }
+
+.browser__listen {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  color: var(--accent-2);
+  background: rgba(64, 196, 255, 0.12);
+  border: 1px solid rgba(64, 196, 255, 0.35);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.browser__listen:hover { background: rgba(64, 196, 255, 0.22); }
+.browser__listen:active { transform: scale(0.94); }
+
+.modal__panel--wide { max-width: 660px; }
+
+.browser__search { width: 100%; }
+
+.browser__list {
+  max-height: min(52vh, 460px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 4px;
+}
+
+.browser__group ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+
+.browser__group-name {
+  margin: 0 0 7px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.browser__row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 12px;
+  border: 1px solid var(--field-border);
+  border-radius: 11px;
+  background: var(--field);
+}
+
+.browser__row.is-chosen { border-color: var(--accent); background: var(--accent-soft); }
+
+.browser__name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.browser__meta { font-size: 0.7rem; font-weight: 400; color: var(--text-faint); }
+
+.browser__foot { align-items: center; justify-content: space-between; }
+.browser__tally { margin: 0; font-size: 0.78rem; color: var(--text-faint); }
+
+/* ---------- the mixer ---------- */
+
+.mixer {
+  width: 100%;
+  padding: 10px 13px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+}
+
+.mixer > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.mixer > summary::-webkit-details-marker { display: none; }
+.mixer > summary::before { content: "▸"; color: var(--text-faint); font-size: 0.75rem; }
+.mixer[open] > summary::before { content: "▾"; }
+
+.mixer__count {
+  padding: 2px 8px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--warn);
+  background: rgba(251, 191, 36, 0.14);
+  border-radius: 999px;
+}
+
+.mixer__hint { margin: 10px 0 0; font-size: 0.72rem; line-height: 1.5; color: var(--text-faint); }
+
+.mixer__list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mixer__part {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--field-border);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.mixer__part:hover { background: rgba(255, 255, 255, 0.08); }
+.mixer__part.is-off { color: var(--text-faint); opacity: 0.65; }
+.mixer__icon { font-size: 0.85rem; }
+.mixer__all { display: flex; gap: 8px; margin-top: 10px; }
+
 /* ---------- dialog ---------- */
 
 .modal {

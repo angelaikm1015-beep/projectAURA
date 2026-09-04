@@ -374,11 +374,14 @@ def as_dict() -> dict:
         "levels": SKILL_LEVELS,
         "moods": MOODS,
         # Only the parts of INSTRUMENT_SPECS the form needs: how many of this
-        # instrument may be requested, and what to show as a hint.
+        # instrument may be requested, what to show as a hint, and enough to
+        # sound a preview of it in the browser — the MIDI voice and the register
+        # it comfortably sits in.
         "instrumentInfo": {
             name: {"clef": spec["clef"], "maxParts": spec["maxParts"],
                    "staves": spec["staves"], "pitched": spec["pitched"],
-                   "transpose": spec["transpose"]}
+                   "transpose": spec["transpose"], "midi": spec["midi"],
+                   "easy": spec["easy"]}
             for name, spec in INSTRUMENT_SPECS.items()
         },
     }
