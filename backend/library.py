@@ -81,6 +81,7 @@ def _summary(snapshot) -> dict:
         "createdAt": created.isoformat() if hasattr(created, "isoformat") else None,
         "sharedAt": shared.isoformat() if hasattr(shared, "isoformat") else None,
         "partCount": data.get("partCount", 0),
+        "canUndo": bool(data.get("previousScore")),
         "instruments": _instrument_summary(data),
         **{field: data.get(field) for field in SUMMARY_FIELDS},
     }
@@ -179,6 +180,50 @@ def update(score_id: str, uid: str, visibility=None, caption=None) -> dict:
 
     doc_ref.update(updates)
     return _summary(doc_ref.get())
+
+
+def replace_score(score_id: str, uid: str, score: dict) -> dict:
+    """Write a revised piece over the old one, keeping one step of history.
+
+    Exactly one previous version is kept. A revision is a small edit that can
+    still land badly, and being able to say "no, put it back" once is worth a
+    copy; keeping every version would push a large score past Firestore's
+    document limit for no real gain.
+    """
+    doc_ref = _owned(score_id, uid)
+    previous = (doc_ref.get().to_dict() or {}).get("score")
+
+    doc_ref.update({
+        "score": score,
+        "previousScore": previous,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+        # The denormalised copies have to move with it or the library card and
+        # the piece would disagree.
+        **{field: score.get(field) for field in ("title", "tempoText", "tempoBpm",
+                                                 "timeSignature", "concertKey",
+                                                 "measureCount", "programNote")},
+        "partCount": len(score.get("parts") or []),
+    })
+    return _summary(doc_ref.get())
+
+
+def undo(score_id: str, uid: str) -> dict:
+    """Restore the version from before the last revision."""
+    doc_ref = _owned(score_id, uid)
+    previous = (doc_ref.get().to_dict() or {}).get("previousScore")
+    if not previous:
+        raise LibraryError("There's nothing to undo on this piece.", 400)
+
+    doc_ref.update({
+        "score": previous,
+        "previousScore": None,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+        **{field: previous.get(field) for field in ("title", "tempoText", "tempoBpm",
+                                                    "timeSignature", "concertKey",
+                                                    "measureCount", "programNote")},
+        "partCount": len(previous.get("parts") or []),
+    })
+    return previous
 
 
 def set_all_visibility(uid: str, visibility: str) -> int:

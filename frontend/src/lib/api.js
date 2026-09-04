@@ -96,5 +96,18 @@ export const setScoreVisibility = (id, visibility, caption) =>
 export const setAllScoresVisibility = (visibility) =>
   request("/api/scores", { method: "PATCH", body: { visibility }, authenticated: true });
 
+/**
+ * Ask for a small change to a piece that already exists. Slow — it's another
+ * model call — but it edits the music rather than replacing it.
+ */
+export const reviseScore = (id, changeRequest) =>
+  request(`/api/scores/${id}/revise`, {
+    method: "POST", body: { request: changeRequest }, authenticated: true,
+  });
+
+/** Put back the version from before the last change. */
+export const undoRevision = (id) =>
+  request(`/api/scores/${id}/undo`, { method: "POST", authenticated: true });
+
 export const deleteScore = (id) =>
   request(`/api/scores/${id}`, { method: "DELETE", authenticated: true });

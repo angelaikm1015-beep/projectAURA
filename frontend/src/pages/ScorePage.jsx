@@ -17,7 +17,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { AuthCard, BrandHeader, FormMessage } from "../components/chrome";
 import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
-import { fetchOptions, fetchScore, updateScore } from "../lib/api";
+import { fetchOptions, fetchScore, reviseScore, undoRevision, updateScore } from "../lib/api";
 import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
 
@@ -30,6 +30,8 @@ export default function ScorePage() {
   const [options, setOptions] = useState(OPTIONS);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [revising, setRevising] = useState(false);
+  const [revision, setRevision] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,6 +68,30 @@ export default function ScorePage() {
     }
   }
 
+  async function handleRevise(request) {
+    setRevising(true);
+    try {
+      const result = await reviseScore(id, request);
+      setSaved((current) => ({ ...current, score: result.score, canUndo: true }));
+      setRevision({ summary: result.summary });
+    } finally {
+      setRevising(false);
+    }
+  }
+
+  async function handleUndo() {
+    setRevising(true);
+    try {
+      const { score: restored } = await undoRevision(id);
+      setSaved((current) => ({ ...current, score: restored, canUndo: false }));
+      setRevision(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRevising(false);
+    }
+  }
+
   async function handleLogout() {
     await logout();
     navigate("/login", { replace: true });
@@ -98,6 +124,11 @@ export default function ScorePage() {
       onVisibilityChange={saved.mine ? handleVisibility : undefined}
       owner={saved.mine ? null : saved.ownerName}
       saving={saving}
+      onRevise={saved.mine ? handleRevise : undefined}
+      onUndo={handleUndo}
+      canUndo={Boolean(saved.canUndo)}
+      revising={revising}
+      revisionSummary={revision?.summary}
       nav={
         <nav className="compose-nav">
           <Link className="link" to="/compose">Compose</Link>

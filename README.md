@@ -103,8 +103,15 @@ firebase deploy --only firestore:rules
 | `PATCH` | `/api/scores` | Bearer | Share, or unshare, the whole library at once |
 | `GET` | `/api/scores/<id>` | Bearer | One saved score in full — the owner's, or anyone's shared piece |
 | `PATCH` | `/api/scores/<id>` | Bearer | Set one piece's `visibility` (`public`/`private`) and/or its gallery `caption`; both optional, owner only |
+| `POST` | `/api/scores/<id>/revise` | Bearer | Change one thing about a piece in plain language, keeping the rest (owner only) |
+| `POST` | `/api/scores/<id>/undo` | Bearer | Restore the version from before the last revision (owner only) |
 | `DELETE` | `/api/scores/<id>` | Bearer | Delete one piece for good (owner only) |
 | `GET` | `/api/gallery` | Bearer | The community feed — every shared piece with its caption, most recently posted first |
+
+A revision is an edit, not a regeneration: the model is handed the lines it
+already wrote and returns only the parts it needed to touch, so asking to fix
+the oboe cannot quietly rewrite the violins. Exactly one previous version is
+kept, which is what `/undo` restores.
 
 Every generated score is written to Firestore before the response is sent, so
 closing the tab never loses a piece. Scores are saved **private**; they become

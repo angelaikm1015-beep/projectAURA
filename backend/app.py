@@ -237,6 +237,39 @@ def register_routes(app: Flask) -> None:
         changed = library.set_all_visibility(g.uid, data.get("visibility"))
         return jsonify({"changed": changed, "scores": library.list_for_user(g.uid)})
 
+    @app.post("/api/scores/<score_id>/revise")
+    @require_auth
+    def revise_score(score_id):
+        """Change one thing about a piece, keeping the rest of it.
+
+        Slow and paid for, like generation, but far cheaper than starting over:
+        the model is handed the music it already wrote and returns only the
+        lines it needed to touch.
+        """
+        data = request.get_json(silent=True) or {}
+        saved = library.get(score_id, g.uid)
+        if not saved.get("mine"):
+            return jsonify({"message": "You can only edit your own pieces."}), 403
+
+        try:
+            revised = composer.revise(saved["score"], saved["brief"], data.get("request"))
+        except composer.ComposerError as error:
+            app.logger.warning("Revision failed: %s", error)
+            return jsonify({"message": str(error)}), error.status
+
+        library.replace_score(score_id, g.uid, revised)
+        return jsonify({
+            "score": revised,
+            "summary": revised.get("revisionSummary"),
+            "changedPartIds": revised.get("changedPartIds") or [],
+        })
+
+    @app.post("/api/scores/<score_id>/undo")
+    @require_auth
+    def undo_revision(score_id):
+        """Put back the version from before the last change."""
+        return jsonify({"score": library.undo(score_id, g.uid)})
+
     @app.delete("/api/scores/<score_id>")
     @require_auth
     def delete_score(score_id):

@@ -519,6 +519,102 @@ function ShareControl({ visibility, caption = "", saving, onChange }) {
 }
 
 
+/*
+ * Asking for a change.
+ *
+ * Most of what is wrong with a generated piece is small and local — one part
+ * sits badly, the tempo is off, an entry is awkward. Regenerating throws away
+ * everything that was right in order to fix one thing that wasn't, so this
+ * sends the request to the model along with the music it already wrote and
+ * changes only the lines it needs to.
+ */
+function ReviseBox({ activeLabel, isPart, revising, summary, canUndo, onRevise, onUndo }) {
+  const [text, setText] = useState("");
+  const [error, setError] = useState(null);
+
+  const suggestions = isPart
+    ? [`Make the ${activeLabel} part easier to play`,
+       `Give the ${activeLabel} more of the melody`,
+       `The ${activeLabel} part sounds awkward — rewrite it`]
+    : ["Make it slower",
+       "Make the ending stronger",
+       "Give the inner parts more to do"];
+
+  async function send(request) {
+    const asked = (request || text).trim();
+    if (!asked) return;
+    setError(null);
+    try {
+      await onRevise(asked);
+      setText("");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <section className="revise">
+      <h2 className="score-block__head">Ask for a change</h2>
+      <p className="revise__lede">
+        Describe what you'd like different. The rest of the piece stays as it is.
+      </p>
+
+      <form
+        onSubmit={(event) => { event.preventDefault(); send(); }}
+        className="revise__form"
+      >
+        <textarea
+          rows={3}
+          maxLength={400}
+          placeholder={isPart
+            ? `e.g. the ${activeLabel} sits too high — bring it down an octave`
+            : "e.g. the second half repeats too much — develop it instead"}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          disabled={revising}
+        />
+        <button type="submit" className="btn btn-small" disabled={revising || !text.trim()}>
+          {revising ? "Rewriting…" : "Send"}
+        </button>
+      </form>
+
+      <ul className="revise__chips">
+        {suggestions.map((suggestion) => (
+          <li key={suggestion}>
+            <button
+              type="button"
+              onClick={() => send(suggestion)}
+              disabled={revising}
+            >
+              {suggestion}
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {revising && (
+        <p className="revise__working" aria-live="polite">
+          Rewriting just what you asked about — this takes about as long as a
+          short generation.
+        </p>
+      )}
+
+      {error && <p className="form-message is-error" role="alert">{error}</p>}
+
+      {summary && !revising && (
+        <div className="revise__done">
+          <p className="revise__summary">{summary}</p>
+          {canUndo && (
+            <button type="button" className="btn btn-ghost btn-small" onClick={onUndo}>
+              Undo that change
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ConductorNotes({ conductor }) {
   return (
     <div className="podium">
@@ -585,6 +681,11 @@ export function ScoreView({
   visibility,
   caption,
   onVisibilityChange,
+  onRevise,
+  onUndo,
+  canUndo = false,
+  revising = false,
+  revisionSummary,
   owner,
   saving = false,
   nav,
@@ -653,6 +754,18 @@ export function ScoreView({
             onChange={onVisibilityChange}
           />}
 
+          {onRevise && (
+            <ReviseBox
+              activeLabel={active.label}
+              isPart={!active.nameEveryLine}
+              revising={revising}
+              summary={revisionSummary}
+              canUndo={canUndo}
+              onRevise={onRevise}
+              onUndo={onUndo}
+            />
+          )}
+
           <section className="score-block">
             <h2 className="score-block__head">Written for</h2>
             <ul className="score-forlist">
@@ -682,6 +795,7 @@ export function ScoreView({
             <h2 className="score-block__head">About this piece</h2>
             <p className="score-about">{score.programNote}</p>
           </section>
+
 
           {nav && <div className="score-aside__nav">{nav}</div>}
         </div>

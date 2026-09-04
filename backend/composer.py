@@ -729,6 +729,235 @@ def _describe(problems: list) -> list:
     return [warning + ". Generating again usually clears it."]
 
 
+# ---------------------------------------------------------------------------
+# Revising a piece that already exists
+# ---------------------------------------------------------------------------
+
+REVISION_MAX = 400
+
+# A revision returns replacements for the parts it touched, and may adjust the
+# few top-level facts a plain-language request can reasonably ask about ("make
+# it slower", "call it something else"). Everything is required because strict
+# JSON schema demands it; null means "leave this alone".
+REVISION_SCHEMA = _obj({
+    "summary": {"type": "string",
+                "description": "One sentence, for the user, saying what you changed."},
+    "parts": {"type": "array", "items": PART_SCHEMA,
+              "description": "ONLY the parts you rewrote. Omit every part you left alone."},
+    "tempoBpm": {"type": ["integer", "null"], "description": "New tempo, or null to keep it."},
+    "tempoText": {"type": ["string", "null"], "description": "New marking, or null to keep it."},
+    "title": {"type": ["string", "null"], "description": "New title, or null to keep it."},
+})
+
+
+def _written_from_score_abc(abc_text: str) -> list:
+    """Recover the model's raw lines from an assembled full score.
+
+    Pieces saved before revisions existed kept only the assembled tunes. Since
+    this module wrote those tunes, it can read them back: after the header, the
+    body is a run of ``V:<id>`` blocks, each with its own ``K:`` and then music.
+    Grand-staff instruments contribute two voices, ``P7a`` and ``P7b``, which are
+    the one part's upper and lower staves.
+    """
+    lines = (abc_text or "").splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("K:")), None)
+    if start is None:
+        return []
+
+    voices, current = {}, None
+    order = []
+    for line in lines[start + 1:]:
+        if line.startswith("V:"):
+            current = line[2:].strip().split()[0]
+            if current not in voices:
+                voices[current] = {"key": "C", "music": []}
+                order.append(current)
+        elif current is None or line.startswith("%%"):
+            continue
+        elif line.startswith("K:"):
+            voices[current]["key"] = line[2:].strip()
+        elif line.strip():
+            voices[current]["music"].append(line.strip())
+
+    written = {}
+    for voice_id in order:
+        part_id = voice_id[:-1] if voice_id[-1] in "ab" else voice_id
+        entry = written.setdefault(part_id, {"partId": part_id, "abcKey": voices[voice_id]["key"],
+                                             "abc": None, "abcLower": None,
+                                             "performanceNote": ""})
+        music = " ".join(voices[voice_id]["music"])
+        if entry["abc"] is None:
+            entry["abc"] = music
+        else:
+            entry["abcLower"] = music
+    return list(written.values())
+
+
+def _written_parts(score: dict) -> list:
+    """The editable lines for this piece, however it was saved."""
+    if score.get("written"):
+        return score["written"]
+    recovered = _written_from_score_abc(score.get("scoreAbc") or "")
+    if not recovered:
+        raise ComposerError("This piece can't be edited — try generating it again.",
+                            status=400)
+    return recovered
+
+
+def _current_parts_text(current: list, roster: list) -> list:
+    """The music as it stands, part by part, for the model to edit."""
+    by_id = {written["partId"]: written for written in current}
+    lines = []
+    for part in roster:
+        written = by_id.get(part["partId"])
+        if not written:
+            continue
+        lines.append(f"  [{part['partId']}] {part['label']} (written key "
+                     f"{written.get('abcKey', '?')}):")
+        lines.append(f"    {written.get('abc', '')}")
+        if written.get("abcLower"):
+            lines.append(f"    lower staff: {written['abcLower']}")
+    return lines
+
+
+def revise(score: dict, request: dict, instruction: str) -> dict:
+    """Change part of an existing piece, keeping the rest of it intact.
+
+    The whole point is that this is *not* a new piece: the model is handed the
+    music it already wrote and asked to hand back only the lines it needed to
+    touch. Everything it does not return is kept exactly as it was, so asking to
+    fix the oboe cannot quietly rewrite the violins.
+    """
+    instruction = (instruction or "").strip()
+    if not instruction:
+        raise ComposerError("Say what you'd like changed.", status=400)
+    if len(instruction) > REVISION_MAX:
+        raise ComposerError(f"Keep the request under {REVISION_MAX} characters.", status=400)
+
+    roster = build_roster(request["instruments"])
+    current = _written_parts(score)
+    level = options.LEVELS_BY_VALUE[request["level"]]
+    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+    expected = abc_check.units_per_bar(score.get("timeSignature"), UNIT_NOTE_LENGTH)
+
+    lines = [
+        "Here is a piece you already wrote. The player wants one thing changed.",
+        "",
+        f"TITLE: {score.get('title')}",
+        f"TIME SIGNATURE: {score.get('timeSignature')}   "
+        f"TEMPO: {score.get('tempoText')} ({score.get('tempoBpm')} bpm)   "
+        f"CONCERT KEY: {score.get('concertKey')}",
+        f"LENGTH: {score.get('measureCount')} measures. Every part has exactly this many.",
+        "",
+        "THE PARTS AS THEY STAND:",
+    ]
+    lines += _current_parts_text(current, roster)
+    lines += [
+        "",
+        "WHAT THE PLAYER ASKED FOR:",
+        f"  {instruction}",
+        "",
+        f"PLAYING LEVEL: {level['label']} — {level['guidance']}",
+        "",
+        "RULES FOR THIS EDIT",
+        "  * This is an edit, not a new piece. Keep the theme, the key, the",
+        "    character and the measure count exactly as they are unless the",
+        "    request specifically asks you to change them.",
+        "  * Return ONLY the parts you actually rewrote. Any part you do not",
+        "    return is kept as it is — so do not return a part you did not change,",
+        "    and do not return an unchanged copy 'for completeness'.",
+        "  * A rewritten part must still have exactly "
+        f"{score.get('measureCount')} measures, and every bar must total "
+        f"{abc_check._fmt(expected)} units at L:{UNIT_NOTE_LENGTH}.",
+        "  * Whatever you change must still fit against the parts you are leaving",
+        "    alone: check the harmony where they sound together.",
+        "  * Stay inside each part's playable range and the level above.",
+        "  * Set tempoBpm, tempoText and title to null unless the request asked",
+        "    for them to change.",
+    ]
+
+    try:
+        completion = _create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": "\n".join(lines)},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "revision", "strict": True,
+                                "schema": REVISION_SCHEMA},
+            },
+            # Low: an edit should be a considered change, not a reimagining.
+            temperature=0.4,
+            max_tokens=_token_budget(roster),
+        )
+    except OpenAIError as error:
+        raise ComposerError(_explain(error, model)) from error
+
+    choice = completion.choices[0]
+    if choice.finish_reason == "length":
+        raise ComposerError("That change was too big to write in one go. Try asking "
+                            "for one part at a time.", status=502)
+    try:
+        revision = json.loads(choice.message.content)
+    except (TypeError, ValueError) as error:
+        raise ComposerError("The generator returned something we couldn't read. "
+                            "Please try again.") from error
+
+    changed = {written["partId"]: written for written in (revision.get("parts") or [])
+               if written.get("partId")}
+    touched_meta = {field: revision.get(field) for field in ("tempoBpm", "tempoText", "title")
+                    if revision.get(field)}
+    if not changed and not touched_meta:
+        raise ComposerError("Nothing was changed — try describing the change "
+                            "differently, or naming the part you mean.", status=502)
+
+    # Everything the model did not hand back is kept exactly as it was.
+    merged = [changed.get(written["partId"], written) for written in current]
+
+    revised = {
+        **{key: score.get(key) for key in ("title", "tempoText", "tempoBpm", "beatUnit",
+                                           "timeSignature", "concertKey", "measureCount",
+                                           "programNote", "rehearsalTips")},
+        **touched_meta,
+        # Older pieces were saved without it; 1/4 is what they were written with.
+        "beatUnit": score.get("beatUnit") or "1/4",
+        "parts": merged,
+    }
+
+    problems = validate_notation(revised, roster, request["level"])
+
+    return {
+        **{key: revised[key] for key in ("title", "tempoText", "tempoBpm", "beatUnit",
+                                         "timeSignature", "concertKey", "measureCount",
+                                         "programNote", "rehearsalTips")},
+        "conductor": score.get("conductor"),
+        "scoreAbc": assemble_abc(revised, roster),
+        "parts": [
+            {
+                "partId": part["partId"],
+                "label": part["label"],
+                "instrument": part["instrument"],
+                "clef": part["clef"],
+                "transposed": part["transpose"] != 0,
+                "performanceNote": next(
+                    (w.get("performanceNote") for w in merged
+                     if w["partId"] == part["partId"]), ""),
+                "abc": assemble_abc(revised, roster, only_part_id=part["partId"]),
+            }
+            for part in roster
+            if any(w["partId"] == part["partId"] for w in merged)
+        ],
+        "written": merged,
+        "warnings": _describe(problems),
+        "repaired": False,
+        "model": model,
+        "revisionSummary": revision.get("summary") or "Updated.",
+        "changedPartIds": sorted(changed),
+    }
+
+
 def compose(request: dict) -> dict:
     """Generate a score. ``request`` must already have passed validation."""
     roster = build_roster(request["instruments"])
@@ -784,6 +1013,10 @@ def compose(request: dict) -> dict:
         "title": score["title"],
         "tempoText": score["tempoText"],
         "tempoBpm": score["tempoBpm"],
+        # Stored because a later revision reassembles every part from these, and
+        # a missing beat unit would rewrite the tempo line of parts nobody
+        # asked to change.
+        "beatUnit": score["beatUnit"],
         "timeSignature": score["timeSignature"],
         "concertKey": score["concertKey"],
         "measureCount": score["measureCount"],
@@ -806,6 +1039,10 @@ def compose(request: dict) -> dict:
             for part in roster
             if any(w["partId"] == part["partId"] for w in score["parts"])
         ],
+        # The model's own output, before assembly. Kept because a revision edits
+        # these lines; the assembled tunes above are built from them and cannot
+        # be edited back into shape.
+        "written": score["parts"],
         "warnings": _describe(problems),
         "repaired": repaired,
         "model": model,

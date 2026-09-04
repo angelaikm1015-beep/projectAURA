@@ -1131,6 +1131,60 @@ textarea:focus {
 .browser__foot { align-items: center; justify-content: space-between; }
 .browser__tally { margin: 0; font-size: 0.78rem; color: var(--text-faint); }
 
+/* ---------- asking for a change ---------- */
+
+.revise {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 15px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius);
+}
+
+.revise__lede { margin: 0; font-size: 0.74rem; line-height: 1.5; color: var(--text-faint); }
+
+.revise__form { display: flex; flex-direction: column; gap: 8px; }
+.revise__form textarea { min-height: 66px; font-size: 0.82rem; }
+
+.revise__chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+
+.revise__chips button {
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.revise__chips button:hover:not(:disabled) { color: var(--text); border-color: var(--accent-2); }
+.revise__chips button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.revise__working {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--accent-2);
+}
+
+.revise__done {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(74, 222, 128, 0.09);
+  border: 1px solid rgba(74, 222, 128, 0.32);
+  border-radius: 10px;
+}
+
+.revise__summary { margin: 0; font-size: 0.78rem; line-height: 1.55; color: var(--text); }
+
 /* ---------- the mixer ---------- */
 
 /* Sits directly above the paper, always open. Hiding it behind a disclosure

@@ -26,7 +26,7 @@ import { ChoiceCards, SelectField, TextAreaField } from "../components/fields";
 import { InstrumentPicker, totalParts } from "../components/instrument-picker";
 import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
-import { ApiError, compose, fetchOptions, updateScore } from "../lib/api";
+import { ApiError, compose, fetchOptions, reviseScore, undoRevision, updateScore } from "../lib/api";
 import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
 
@@ -82,6 +82,8 @@ export default function ComposePage() {
   const [brief, setBrief] = useState(null);
   const [saved, setSaved] = useState(null); // { id, visibility } once it is stored
   const [sharing, setSharing] = useState(false);
+  const [revising, setRevising] = useState(false);
+  const [revision, setRevision] = useState(null); // { summary, canUndo }
   const [options, setOptions] = useState(OPTIONS);
 
   // Same pattern as signup: render from the bundled copy immediately, prefer the
@@ -154,6 +156,7 @@ export default function ComposePage() {
       setSaved(result.scoreId
         ? { id: result.scoreId, visibility: "private", caption: "" }
         : null);
+      setRevision(null);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
       if (error instanceof ApiError && Object.keys(error.fieldErrors).length) {
@@ -183,6 +186,35 @@ export default function ComposePage() {
   /* Both arguments are optional: sharing sends a visibility and usually a
      caption, editing the caption of an already-posted piece sends only the
      caption. */
+  /* An edit, not a regeneration: the piece on screen is replaced by the same
+     piece with one thing changed. Errors are thrown back so the box that asked
+     can show them next to the request. */
+  async function handleRevise(request) {
+    if (!saved) return;
+    setRevising(true);
+    try {
+      const result = await reviseScore(saved.id, request);
+      setScore(result.score);
+      setRevision({ summary: result.summary, canUndo: true });
+    } finally {
+      setRevising(false);
+    }
+  }
+
+  async function handleUndo() {
+    if (!saved) return;
+    setRevising(true);
+    try {
+      const { score: restored } = await undoRevision(saved.id);
+      setScore(restored);
+      setRevision(null);
+    } catch (error) {
+      setMessage({ text: error.message, kind: "error" });
+    } finally {
+      setRevising(false);
+    }
+  }
+
   async function handleShare(visibility, caption) {
     if (!saved) return;
     setSharing(true);
@@ -230,6 +262,11 @@ export default function ComposePage() {
         caption={saved?.caption}
         onVisibilityChange={saved ? handleShare : undefined}
         saving={sharing}
+        onRevise={saved ? handleRevise : undefined}
+        onUndo={handleUndo}
+        canUndo={Boolean(revision?.canUndo)}
+        revising={revising}
+        revisionSummary={revision?.summary}
         onRegenerate={() => runCompose(payload())}
         onNewBrief={() => { setScore(null); setMessage(null); }}
         nav={railNav}
