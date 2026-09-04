@@ -102,15 +102,17 @@ firebase deploy --only firestore:rules
 | `GET` | `/api/scores` | Bearer | The signed-in user's library, newest first (summaries only) |
 | `PATCH` | `/api/scores` | Bearer | Share, or unshare, the whole library at once |
 | `GET` | `/api/scores/<id>` | Bearer | One saved score in full — the owner's, or anyone's shared piece |
-| `PATCH` | `/api/scores/<id>` | Bearer | Set one piece's `visibility` to `public` or `private` (owner only) |
+| `PATCH` | `/api/scores/<id>` | Bearer | Set one piece's `visibility` (`public`/`private`) and/or its gallery `caption`; both optional, owner only |
 | `DELETE` | `/api/scores/<id>` | Bearer | Delete one piece for good (owner only) |
-| `GET` | `/api/gallery` | Bearer | Every piece anyone has shared |
+| `GET` | `/api/gallery` | Bearer | The community feed — every shared piece with its caption, most recently posted first |
 
 Every generated score is written to Firestore before the response is sent, so
 closing the tab never loses a piece. Scores are saved **private**; they become
 visible in the gallery only when their owner shares them, one piece at a time.
 Asking for a private score that isn't yours returns `404`, not `403` — a stranger
-shouldn't be able to learn which ids exist.
+shouldn't be able to learn which ids exist. Sharing writes a caption alongside
+the piece and stamps `sharedAt`, so the gallery reads as a feed of posts ordered
+by when they were posted rather than when the music was written.
 
 Validation failures come back as `400` with `{"message": ..., "errors": {"<field>": "<message>"}}`,
 which the frontend renders under the matching input.

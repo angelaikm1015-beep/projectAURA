@@ -26,7 +26,7 @@ import { ChoiceCards, SelectField, TextAreaField } from "../components/fields";
 import { InstrumentPicker, totalParts } from "../components/instrument-picker";
 import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
-import { ApiError, compose, fetchOptions, setScoreVisibility } from "../lib/api";
+import { ApiError, compose, fetchOptions, updateScore } from "../lib/api";
 import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
 
@@ -151,7 +151,9 @@ export default function ComposePage() {
       setBrief(describeBrief(options, sent));
       // The API saves every piece as it makes it. Without an id the score is
       // still on screen and still downloadable, it just can't be shared.
-      setSaved(result.scoreId ? { id: result.scoreId, visibility: "private" } : null);
+      setSaved(result.scoreId
+        ? { id: result.scoreId, visibility: "private", caption: "" }
+        : null);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
       if (error instanceof ApiError && Object.keys(error.fieldErrors).length) {
@@ -178,12 +180,18 @@ export default function ComposePage() {
     await runCompose(payload());
   }
 
-  async function handleShare(visibility) {
+  /* Both arguments are optional: sharing sends a visibility and usually a
+     caption, editing the caption of an already-posted piece sends only the
+     caption. */
+  async function handleShare(visibility, caption) {
     if (!saved) return;
     setSharing(true);
     try {
-      await setScoreVisibility(saved.id, visibility);
-      setSaved((current) => ({ ...current, visibility }));
+      const changes = {};
+      if (visibility !== undefined) changes.visibility = visibility;
+      if (caption !== undefined) changes.caption = caption;
+      await updateScore(saved.id, changes);
+      setSaved((current) => ({ ...current, ...changes }));
     } catch (error) {
       setMessage({ text: error.message, kind: "error" });
     } finally {
@@ -200,7 +208,7 @@ export default function ComposePage() {
   // same destinations ride along in its rail instead.
   const railNav = (
     <nav className="compose-nav">
-      <Link className="link" to="/welcome">My page</Link>
+      <Link className="link" to="/welcome">My library</Link>
       <Link className="link" to="/gallery">Gallery</Link>
       <button type="button" className="link link-button" onClick={handleLogout}>
         Log out
@@ -219,6 +227,7 @@ export default function ComposePage() {
         pendingLabel={WAIT_STEPS[step]}
         error={message?.kind === "error" ? message.text : null}
         visibility={saved?.visibility}
+        caption={saved?.caption}
         onVisibilityChange={saved ? handleShare : undefined}
         saving={sharing}
         onRegenerate={() => runCompose(payload())}

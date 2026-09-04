@@ -48,7 +48,9 @@ export function ScoreCard({ score, onShare, onDelete, busy = false }) {
         </ul>
       )}
 
-      {score.programNote && <p className="card__note">{score.programNote}</p>}
+      {score.caption
+        ? <p className="card__caption">“{score.caption}”</p>
+        : score.programNote && <p className="card__note">{score.programNote}</p>}
 
       <div className="card__actions">
         <Link className="btn btn-ghost btn-small" to={`/score/${score.id}`}>Open</Link>

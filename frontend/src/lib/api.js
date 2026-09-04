@@ -81,9 +81,16 @@ export const fetchGallery = () => request("/api/gallery", { authenticated: true 
 /** One saved score in full — yours, or anyone's shared piece. */
 export const fetchScore = (id) => request(`/api/scores/${id}`, { authenticated: true });
 
+/**
+ * Share one piece, take it back, or reword its caption. Both fields are
+ * optional: `{ visibility }` alone flips it, `{ caption }` alone edits the post.
+ */
+export const updateScore = (id, changes) =>
+  request(`/api/scores/${id}`, { method: "PATCH", body: changes, authenticated: true });
+
 /** Share one piece, or take it back. `visibility` is "public" or "private". */
-export const setScoreVisibility = (id, visibility) =>
-  request(`/api/scores/${id}`, { method: "PATCH", body: { visibility }, authenticated: true });
+export const setScoreVisibility = (id, visibility, caption) =>
+  updateScore(id, caption === undefined ? { visibility } : { visibility, caption });
 
 /** Share, or unshare, the whole library at once. */
 export const setAllScoresVisibility = (visibility) =>

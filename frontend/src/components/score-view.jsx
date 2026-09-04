@@ -225,9 +225,15 @@ function PlaybackButton({ tune }) {
  * thing that ever makes one visible to anyone else — which is why it says
  * plainly which state it is in rather than relying on the look of a switch.
  */
-function ShareControl({ visibility, saving, onChange }) {
+function ShareControl({ visibility, caption = "", saving, onChange }) {
   const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState(caption);
+  const [writing, setWriting] = useState(false);
   const isPublic = visibility === "public";
+
+  // A caption edited elsewhere (or a different piece loaded into the same
+  // reader) should replace whatever is sitting in the box.
+  useEffect(() => { setDraft(caption); setWriting(false); }, [caption]);
 
   async function copyLink() {
     try {
@@ -243,31 +249,100 @@ function ShareControl({ visibility, saving, onChange }) {
     <section className={`share${isPublic ? " is-public" : ""}`}>
       <p className="share__state">
         <span className="share__dot" aria-hidden="true" />
-        {isPublic ? "Shared in the gallery" : "Private to you"}
+        {isPublic ? "Posted to the gallery" : "Private to you"}
       </p>
       <p className="share__hint">
         {isPublic
           ? "Anyone signed in can find this piece and read every part."
           : "Saved to your library. Nobody else can see it."}
       </p>
+
+      {isPublic && caption && !writing && (
+        <p className="share__caption">“{caption}”</p>
+      )}
+
+      {(writing || (!isPublic && draft)) && (
+        <label className="share__write">
+          <span className="sr-only">Say something about this piece</span>
+          <textarea
+            rows={3}
+            maxLength={600}
+            placeholder="Say something about it…"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+        </label>
+      )}
+
       <div className="share__actions">
-        <button
-          type="button"
-          className="btn btn-ghost btn-small"
-          onClick={() => onChange(isPublic ? "private" : "public")}
-          disabled={saving}
-        >
-          {saving ? "Saving…" : isPublic ? "Make it private" : "Share it"}
-        </button>
-        {isPublic && (
-          <button type="button" className="btn btn-ghost btn-small" onClick={copyLink}>
-            {copied ? "Link copied" : "Copy link"}
+        {!isPublic && !writing && !draft && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => setWriting(true)}
+          >
+            Share it
           </button>
+        )}
+
+        {!isPublic && (writing || draft) && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => onChange("public", draft.trim())}
+            disabled={saving}
+          >
+            {saving ? "Posting…" : "Post it"}
+          </button>
+        )}
+
+        {isPublic && !writing && (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => onChange("private")}
+              disabled={saving}
+            >
+              Make it private
+            </button>
+            <button type="button" className="btn btn-ghost btn-small" onClick={copyLink}>
+              {copied ? "Link copied" : "Copy link"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => setWriting(true)}
+            >
+              {caption ? "Edit caption" : "Add a caption"}
+            </button>
+          </>
+        )}
+
+        {isPublic && writing && (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => onChange(undefined, draft.trim())}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save caption"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => { setDraft(caption); setWriting(false); }}
+            >
+              Cancel
+            </button>
+          </>
         )}
       </div>
     </section>
   );
 }
+
 
 function ConductorNotes({ conductor }) {
   return (
@@ -333,6 +408,7 @@ export function ScoreView({
   onRegenerate,
   onNewBrief,
   visibility,
+  caption,
   onVisibilityChange,
   owner,
   saving = false,
@@ -396,6 +472,7 @@ export function ScoreView({
 
           {onVisibilityChange && <ShareControl
             visibility={visibility}
+            caption={caption}
             saving={saving}
             onChange={onVisibilityChange}
           />}

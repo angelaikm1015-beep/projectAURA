@@ -25,7 +25,7 @@ export default function App() {
   return (
     <Routes>
       {/* Signing in drops you straight into the thing the app is for. The
-          profile and library live behind "My page" in the top bar. */}
+          profile and library live behind "My library" in the top bar. */}
       <Route path="/login" element={user ? <Navigate to="/compose" replace /> : <LoginPage />} />
       <Route path="/signup" element={user ? <Navigate to="/compose" replace /> : <SignupPage />} />
       <Route path="/welcome" element={user ? <WelcomePage /> : <Navigate to="/login" replace />} />

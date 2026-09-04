@@ -8,6 +8,11 @@ Visibility is per piece, not per account. A score is private when it is written,
 and stays private until its owner shares it. That way "share this one" never
 means "share everything I have ever made" by accident.
 
+Sharing is a post, not just a flag: the owner writes a caption saying what the
+piece is and why they made it, and the gallery reads as a feed of those posts,
+newest share first. ``sharedAt`` is when it went public, which is not when it
+was written — a piece made last month and shared today belongs at the top.
+
 Like profiles, these documents are written only through the Admin SDK here — the
 rules in ``firestore.rules`` deny client writes outright, so visibility can only
 change through an owner-checked call in this module.
@@ -30,7 +35,10 @@ VISIBILITIES = (PRIVATE, PUBLIC)
 SUMMARY_FIELDS = (
     "title", "tempoText", "tempoBpm", "timeSignature", "concertKey",
     "measureCount", "programNote", "visibility", "brief", "ownerName", "uid",
+    "caption",
 )
+
+CAPTION_MAX = 600
 
 
 class LibraryError(Exception):
@@ -48,6 +56,8 @@ def save(uid: str, owner_name: str, score: dict, brief: dict) -> str:
         "uid": uid,
         "ownerName": owner_name,
         "visibility": PRIVATE,
+        "caption": "",
+        "sharedAt": None,
         "score": score,
         "brief": brief,
         "createdAt": firestore.SERVER_TIMESTAMP,
@@ -65,9 +75,11 @@ def save(uid: str, owner_name: str, score: dict, brief: dict) -> str:
 def _summary(snapshot) -> dict:
     data = snapshot.to_dict() or {}
     created = data.get("createdAt")
+    shared = data.get("sharedAt")
     return {
         "id": snapshot.id,
         "createdAt": created.isoformat() if hasattr(created, "isoformat") else None,
+        "sharedAt": shared.isoformat() if hasattr(shared, "isoformat") else None,
         "partCount": data.get("partCount", 0),
         "instruments": _instrument_summary(data),
         **{field: data.get(field) for field in SUMMARY_FIELDS},
@@ -84,7 +96,7 @@ def _instrument_summary(data: dict) -> list:
     ]
 
 
-def _newest_first(rows: list) -> list:
+def _newest_first(rows: list, key: str = "createdAt") -> list:
     """Sort in Python rather than Firestore.
 
     An ``order_by`` alongside a ``where`` needs a composite index created by
@@ -92,7 +104,8 @@ def _newest_first(rows: list) -> list:
     miserable way to meet a new feature. Libraries are small; sorting here costs
     nothing and the app works the moment it is deployed.
     """
-    return sorted(rows, key=lambda row: row.get("createdAt") or "", reverse=True)
+    return sorted(rows, key=lambda row: row.get(key) or row.get("createdAt") or "",
+                  reverse=True)
 
 
 def _mine(uid: str):
@@ -106,10 +119,10 @@ def list_for_user(uid: str) -> list:
 
 
 def list_public(limit: int = 100) -> list:
-    """Every piece anyone has shared, newest first."""
+    """The feed — every piece anyone has shared, most recently shared first."""
     query = db().collection(SCORES_COLLECTION).where(
         filter=FieldFilter("visibility", "==", PUBLIC))
-    return _newest_first([_summary(doc) for doc in query.stream()])[:limit]
+    return _newest_first([_summary(doc) for doc in query.stream()], "sharedAt")[:limit]
 
 
 def get(score_id: str, uid: str | None) -> dict:
@@ -138,13 +151,33 @@ def _owned(score_id: str, uid: str):
     return doc_ref
 
 
-def set_visibility(score_id: str, uid: str, visibility: str) -> dict:
-    """Share one piece, or take it back. Owner only."""
-    if visibility not in VISIBILITIES:
+def update(score_id: str, uid: str, visibility=None, caption=None) -> dict:
+    """Share a piece, take it back, or reword the post. Owner only.
+
+    Both fields are optional, so the caption can be edited without touching
+    visibility and vice versa.
+    """
+    if visibility is not None and visibility not in VISIBILITIES:
         raise LibraryError("Visibility must be 'private' or 'public'.")
+    if caption is not None:
+        if not isinstance(caption, str):
+            raise LibraryError("The caption has to be text.")
+        caption = caption.strip()
+        if len(caption) > CAPTION_MAX:
+            raise LibraryError(f"Keep the caption under {CAPTION_MAX} characters.")
 
     doc_ref = _owned(score_id, uid)
-    doc_ref.update({"visibility": visibility, "updatedAt": firestore.SERVER_TIMESTAMP})
+    updates = {"updatedAt": firestore.SERVER_TIMESTAMP}
+    if caption is not None:
+        updates["caption"] = caption
+    if visibility is not None:
+        updates["visibility"] = visibility
+        # Stamped on the way out, so the feed orders by when a piece was posted
+        # rather than when it happened to be written.
+        if visibility == PUBLIC:
+            updates["sharedAt"] = firestore.SERVER_TIMESTAMP
+
+    doc_ref.update(updates)
     return _summary(doc_ref.get())
 
 
@@ -158,8 +191,10 @@ def set_all_visibility(uid: str, visibility: str) -> int:
     for doc in _mine(uid).stream():
         if (doc.to_dict() or {}).get("visibility") == visibility:
             continue
-        batch.update(doc.reference, {"visibility": visibility,
-                                     "updatedAt": firestore.SERVER_TIMESTAMP})
+        fields = {"visibility": visibility, "updatedAt": firestore.SERVER_TIMESTAMP}
+        if visibility == PUBLIC:
+            fields["sharedAt"] = firestore.SERVER_TIMESTAMP
+        batch.update(doc.reference, fields)
         changed += 1
         pending += 1
         # Firestore caps a batch at 500 writes, so commit and start a fresh one

@@ -17,7 +17,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { AuthCard, BrandHeader, FormMessage } from "../components/chrome";
 import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
-import { fetchOptions, fetchScore, setScoreVisibility } from "../lib/api";
+import { fetchOptions, fetchScore, updateScore } from "../lib/api";
 import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
 
@@ -47,11 +47,18 @@ export default function ScorePage() {
     return () => { cancelled = true; };
   }, [id]);
 
-  async function handleVisibility(visibility) {
+  /* Sharing sends a visibility and usually a caption; rewording an already
+     posted piece sends only the caption. */
+  async function handleVisibility(visibility, caption) {
     setSaving(true);
     try {
-      const updated = await setScoreVisibility(id, visibility);
-      setSaved((current) => ({ ...current, visibility: updated.visibility }));
+      const changes = {};
+      if (visibility !== undefined) changes.visibility = visibility;
+      if (caption !== undefined) changes.caption = caption;
+      const updated = await updateScore(id, changes);
+      setSaved((current) => ({
+        ...current, visibility: updated.visibility, caption: updated.caption,
+      }));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -69,7 +76,7 @@ export default function ScorePage() {
       <AuthCard>
         <BrandHeader tagline="That piece isn't available" />
         <FormMessage text={error} />
-        <Link className="btn" to="/welcome">Back to my page</Link>
+        <Link className="btn" to="/welcome">Back to my library</Link>
       </AuthCard>
     );
   }
@@ -87,6 +94,7 @@ export default function ScorePage() {
       score={saved.score}
       brief={describeBrief(options, saved.brief)}
       visibility={saved.visibility}
+      caption={saved.caption}
       onVisibilityChange={saved.mine ? handleVisibility : undefined}
       owner={saved.mine ? null : saved.ownerName}
       saving={saving}
@@ -94,7 +102,7 @@ export default function ScorePage() {
         <nav className="compose-nav">
           <Link className="link" to="/compose">Compose</Link>
           <Link className="link" to="/gallery">Gallery</Link>
-          <Link className="link" to="/welcome">My page</Link>
+          <Link className="link" to="/welcome">My library</Link>
           <button type="button" className="link link-button" onClick={handleLogout}>
             Log out
           </button>
@@ -103,7 +111,7 @@ export default function ScorePage() {
       footer={
         <>
           <Link className="btn" to="/compose">Write a new piece</Link>
-          <Link className="btn btn-ghost btn-small" to="/welcome">Back to my page</Link>
+          <Link className="btn btn-ghost btn-small" to="/welcome">Back to my library</Link>
         </>
       }
     />

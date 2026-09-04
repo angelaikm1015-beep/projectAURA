@@ -221,9 +221,13 @@ def register_routes(app: Flask) -> None:
     @app.patch("/api/scores/<score_id>")
     @require_auth
     def update_score(score_id):
-        """Share one piece, or take it back."""
+        """Share one piece, take it back, or reword its caption."""
         data = request.get_json(silent=True) or {}
-        return jsonify(library.set_visibility(score_id, g.uid, data.get("visibility")))
+        return jsonify(library.update(
+            score_id, g.uid,
+            visibility=data.get("visibility"),
+            caption=data.get("caption"),
+        ))
 
     @app.patch("/api/scores")
     @require_auth

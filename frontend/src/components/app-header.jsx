@@ -7,7 +7,7 @@
  * the links grew — the two now sit in the same flex row and cannot overlap.
  *
  * The account is a plain label rather than a link because there is nothing
- * behind it that "My page" doesn't already cover.
+ * behind it that "My library" doesn't already cover.
  */
 
 import { Link, NavLink, useNavigate } from "react-router-dom";
@@ -17,7 +17,7 @@ import { useAuth } from "../context/AuthContext";
 const LINKS = [
   { to: "/compose", label: "Compose" },
   { to: "/gallery", label: "Gallery" },
-  { to: "/welcome", label: "My page" },
+  { to: "/welcome", label: "My library" },
 ];
 
 export function AppHeader() {

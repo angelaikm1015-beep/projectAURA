@@ -1,18 +1,21 @@
 /*
- * Post-login page — the profile, and everything the user has written.
+ * My library — everything the user has written, with their account details
+ * tucked in above it.
  *
- * The library lives here rather than behind its own route because this is where
- * people land after signing in, and the first question after "who am I" is
- * "where is the piece I made yesterday". Every score is saved automatically and
- * private; sharing is a decision made here, one piece at a time.
+ * The music is the point of this page, so the profile is a single compact strip
+ * rather than a card full of rows: it answers "am I signed in as the right
+ * person" at a glance and folds the rest away behind a toggle. Every score is
+ * saved automatically and private; sharing is a decision made here, one piece
+ * at a time.
  */
 
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import { AppHeader, PageIntro } from "../components/app-header";
-import { AuthCard, FormMessage } from "../components/chrome";
+import { FormMessage } from "../components/chrome";
 import { ScoreCard } from "../components/score-card";
+import { ShareDialog } from "../components/share-dialog";
 import { useAuth } from "../context/AuthContext";
 import {
   deleteScore, fetchMe, fetchMyScores, setAllScoresVisibility, setScoreVisibility,
@@ -30,13 +33,14 @@ const ROWS = [
 ];
 
 export default function WelcomePage() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [profile, setProfile] = useState(null);
   const [error, setError] = useState(null);
   const [scores, setScores] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [posting, setPosting] = useState(null); // the piece being written about
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,18 +64,30 @@ export default function WelcomePage() {
     };
   }, []);
 
-  // The list is small and already in hand, so a share is reflected locally
-  // rather than by refetching the whole library.
+  // Sharing means writing a caption, so it goes through the dialog. Unsharing
+  // needs nothing said, so it happens on the spot. The list is small and already
+  // in hand, so both are reflected locally rather than by refetching.
   async function handleShare(id, visibility) {
+    if (visibility === "public") {
+      setPosting(scores.find((row) => row.id === id) || null);
+      return;
+    }
     setBusy(true);
     try {
-      await setScoreVisibility(id, visibility);
-      setScores((rows) => rows.map((row) => (row.id === id ? { ...row, visibility } : row)));
+      await setScoreVisibility(id, "private");
+      setScores((rows) =>
+        rows.map((row) => (row.id === id ? { ...row, visibility: "private" } : row)));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handlePost(id, caption) {
+    await setScoreVisibility(id, "public", caption);
+    setScores((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, visibility: "public", caption } : row)));
   }
 
   async function handleShareAll(visibility) {
@@ -101,24 +117,52 @@ export default function WelcomePage() {
     }
   }
 
-  async function handleLogout() {
-    await logout();
-    navigate("/login", { replace: true });
-  }
-
   const shared = scores?.filter((row) => row.visibility === "public").length ?? 0;
+
+  // The one-line summary. Everything else is behind "Details".
+  const summary = profile
+    ? [profile.age != null ? `${profile.age}` : null,
+       profile.affiliationLabel || profile.affiliation,
+       profile.instrument,
+       profile.genre].filter(Boolean).join(" · ")
+    : "";
 
   return (
     <div className="library-page">
       <AppHeader />
-      <PageIntro title="My page">
-        {user ? `Signed in as ${user.email}` : "Loading your profile…"}
-      </PageIntro>
 
-      <AuthCard>
-        <FormMessage text={error} />
+      <div className="feed-top">
+        <PageIntro title="My library">
+          Everything you've written. Saved automatically, private until you share it.
+        </PageIntro>
+        <Link className="fab" to="/compose">
+          <span className="fab__plus" aria-hidden="true">+</span>
+          Write a new piece
+        </Link>
+      </div>
 
-        <ul className="profile-list">
+      <FormMessage text={error} />
+
+      <section className="profile-strip">
+        <span className="post__avatar" aria-hidden="true">
+          {(user?.email || "?").charAt(0).toUpperCase()}
+        </span>
+        <div className="profile-strip__who">
+          <span className="profile-strip__email">{user?.email || "Loading…"}</span>
+          {summary && <span className="profile-strip__facts">{summary}</span>}
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost btn-small"
+          aria-expanded={showDetails}
+          onClick={() => setShowDetails((open) => !open)}
+        >
+          {showDetails ? "Hide details" : "Details"}
+        </button>
+      </section>
+
+      {showDetails && (
+        <ul className="profile-list profile-list--compact">
           {ROWS.map(([label, read]) => (
             <li key={label}>
               <span className="k">{label}</span>
@@ -126,22 +170,15 @@ export default function WelcomePage() {
             </li>
           ))}
         </ul>
-
-        <Link className="btn" to="/compose">
-          Write a new piece
-        </Link>
-      </AuthCard>
+      )}
 
       <section className="library">
         <div className="library__head">
-          <div>
-            <h2 className="library__title">My library</h2>
-            {scores?.length > 0 && (
-              <p className="library__count">
-                {scores.length} piece{scores.length === 1 ? "" : "s"} · {shared} shared
-              </p>
-            )}
-          </div>
+          {scores?.length > 0 && (
+            <p className="library__count">
+              {scores.length} piece{scores.length === 1 ? "" : "s"} · {shared} shared
+            </p>
+          )}
 
           {scores?.length > 0 && (
             <div className="library__bulk">
@@ -188,6 +225,14 @@ export default function WelcomePage() {
           </ul>
         )}
       </section>
+
+      {posting && (
+        <ShareDialog
+          fixedScore={posting}
+          onClose={() => setPosting(null)}
+          onShare={handlePost}
+        />
+      )}
     </div>
   );
 }
