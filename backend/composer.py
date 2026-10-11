@@ -20,19 +20,22 @@ beginner flute part stays under G5.
 """
 
 import json
+import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from openai import APIConnectionError, OpenAI, OpenAIError
 
 import abc_check
 import options
 
-# Chosen by measurement, not by version number: against gpt-5.5 on the same
-# brief it wrote more varied lines, gave every part somewhere to rest, and
-# came back with no bar-counting defects at all. See README.
-DEFAULT_MODEL = "gpt-5.6-sol"
+# Chosen by measurement rather than by version number. On one 15-part brief,
+# mean distinct pitches per part: gpt-6.1-sol 65.6, gpt-6-astra 55.5,
+# gpt-5.6-sol 55.7, gpt-6-sol 41.3, gpt-6-luna 26.6 — and luna marked dynamics
+# on only 5 parts of 15. Variety per line is the closest cheap proxy we have for
+# "does this sound written or generated". See README.
+DEFAULT_MODEL = "gpt-6.1-sol"
 
 # The unit note length every part is written in. Fixing it here means one
 # duration convention across the score: 1 = eighth, 2 = quarter, 4 = half.
@@ -71,6 +74,7 @@ def _token_budget(roster: list) -> int:
     staves = sum(part["staves"] for part in roster)
     return min(MAX_OUTPUT_TOKENS, BASE_OUTPUT_TOKENS + OUTPUT_TOKENS_PER_STAFF * staves)
 
+_log = logging.getLogger(__name__)
 _client = None
 
 
@@ -475,10 +479,18 @@ SECTION_SCHEMA = _obj({
 
 PART_PLAN_SCHEMA = _obj({
     "partId": {"type": "string", "description": "Exactly the id given in the brief."},
+    "voice": {"type": "string", "enum": ["soprano", "alto", "tenor", "bass"],
+              "description": "Which line of the four-voice skeleton this player "
+                             "realises. Everyone is assigned one, and that is what "
+                             "makes a dozen independently-written parts agree."},
+    "octave": {"type": "integer",
+               "description": "Octave displacement from that skeleton voice, in "
+                              "octaves: 0 at pitch, 1 an octave up, -1 an octave "
+                              "down. Use it to put the line in the player's range."},
     "role": {"type": "string",
-             "description": "What this player does across the piece — melody, "
-                            "counter-melody, inner harmony, bass, rhythmic "
-                            "support — and where that changes."},
+             "description": "What this player does across the piece — carries the "
+                            "theme, decorates its voice, sustains it, or marks the "
+                            "rhythm of it — and where that changes."},
 })
 
 PLAN_SCHEMA = _obj({
@@ -500,13 +512,35 @@ PLAN_SCHEMA = _obj({
               "description": "The main theme as ABC, in concert pitch, unaccompanied. "
                              "Four to eight bars. This is the tune the piece is built "
                              "from and other parts will be written against it."},
-    "bass": {"type": "string",
-             "description": "The bass line for the WHOLE piece as ABC, concert pitch, "
-                            "one line, measureCount bars. Not just the root of each "
-                            "chord: a line that moves, with inversions and passing "
-                            "notes where they help it walk. The outer parts decide "
-                            "how a piece sounds, so this is written here rather than "
-                            "left to whoever gets the bass part."},
+    "skeleton": _obj({
+        "soprano": {"type": "string"},
+        "alto": {"type": "string"},
+        "tenor": {"type": "string"},
+        "bass": {"type": "string"},
+    }, required=["soprano", "alto", "tenor", "bass"]),
+    "solos": {"type": "array", "items": _obj({
+        "partId": {"type": "string", "description": "Exactly the id given in the brief."},
+        "fromMeasure": {"type": "integer"},
+        "toMeasure": {"type": "integer"},
+        "what": {"type": "string",
+                 "description": "What the solo is and what the rest of the ensemble "
+                                "does underneath it — thin the texture, rest, or hold."},
+    }), "description": "At least one genuine solo: one player exposed, with the "
+                       "others out of the way so it can be heard. Four bars or "
+                       "more. Name a different player for each solo."},
+    "dynamicPlan": {"type": "array", "items": _obj({
+        "fromMeasure": {"type": "integer"},
+        "toMeasure": {"type": "integer"},
+        "level": {"type": "string",
+                  "description": "pp, p, mp, mf, f or ff — the level the ensemble "
+                                 "sits at here."},
+        "shape": {"type": "string",
+                  "description": "How it moves: 'crescendo to ff', 'sudden drop to p', "
+                                 "'steady', 'diminuendo'."},
+    }), "description": "The loud and soft of the whole piece, covering every measure. "
+                       "It must actually travel: at least one passage near the quiet "
+                       "end, one near the loud end, and a moment where the change is "
+                       "sudden rather than gradual."},
     "melodyLead": {"type": "array", "items": _obj({
         "fromMeasure": {"type": "integer"},
         "toMeasure": {"type": "integer"},
@@ -774,7 +808,8 @@ def _repair_batch(score: dict, roster: list, grouped: dict, batch: list,
     return [row for row in returned if row.get("partId") in set(batch)]
 
 
-def _repair(score: dict, roster: list, problems: list, messages: list, model: str) -> dict:
+def _repair(score: dict, roster: list, problems: list, messages: list, model: str,
+            report=None) -> dict:
     """One corrective round, batched the same way the writing is.
 
     Kept to a single round on purpose: it reliably clears arithmetic slips, and
@@ -793,15 +828,24 @@ def _repair(score: dict, roster: list, problems: list, messages: list, model: st
     size = _batch_size(score.get("measureCount") or 32)
     batches = [broken[i:i + size] for i in range(0, len(broken), size)]
 
+    if report:
+        report("fixing", 0, len(batches))
+
     fixed: list = []
     if len(batches) == 1:
         fixed = _repair_batch(score, roster, grouped, batches[0], model)
+        if report:
+            report("fixing", 1, 1)
     else:
+        finished = 0
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
             futures = [pool.submit(_repair_batch, score, roster, grouped, batch, model)
                        for batch in batches]
-            for future in futures:
+            for future in as_completed(futures):
                 fixed += future.result()
+                finished += 1
+                if report:
+                    report("fixing", finished, len(batches))
 
     if not fixed:
         return score
@@ -1095,13 +1139,26 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "measureCount you chose: that grid is what keeps a dozen independent",
         "parts in the same harmony, so it cannot have gaps.",
         "",
-        "Write the two lines that decide how the piece sounds, both in CONCERT",
-        "pitch, because everything else is written against them:",
-        "  * the THEME — unaccompanied, four to eight bars, a tune someone could",
-        "    sing back after hearing it once;",
-        "  * the BASS — the whole piece, bar for bar. Give it somewhere to walk:",
-        "    use inversions so it steps rather than leaping root to root, and",
-        "    let it move against the theme rather than with it.",
+        "Write the THEME in CONCERT pitch — unaccompanied, four to eight bars, a",
+        "tune someone could sing back after hearing it once.",
+        "",
+        "THEN THE SKELETON, WHICH IS THE MOST IMPORTANT THING YOU WILL DO HERE.",
+        "Write the whole piece out as a four-voice chorale in CONCERT pitch —",
+        "soprano, alto, tenor, bass — every bar, start to finish, in ABC.",
+        "",
+        "This is not a sketch. It is the actual harmony of the piece, and every",
+        "instrument in the orchestra will be assigned one of these four lines to",
+        "play. That is the only reason a dozen parts written separately can sound",
+        "like one ensemble. So it has to be correct four-part writing:",
+        "  * every vertical sonority is a real chord — no accidental seconds",
+        "    between voices, nothing left unresolved;",
+        "  * voices move by step wherever they can and hold common tones;",
+        "  * no parallel fifths or octaves between any two voices;",
+        "  * sevenths resolve down, leading notes resolve up, suspensions resolve;",
+        "  * keep the voices in a sensible spread — close at the top, wider at the",
+        "    bottom — and do not let them cross.",
+        "If the chorale sounds good on its own at a piano, the orchestration will",
+        "sound good. If it does not, nothing the players do afterwards can save it.",
         "",
         "HARMONY THAT GOES SOMEWHERE. A chord grid that sits on I, IV and V is",
         "what makes a piece sound generated. Use inversions, at least one",
@@ -1113,8 +1170,24 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "it covers the whole piece. A piece where one instrument holds the melody",
         "from bar 1 to the end is the commonest way this goes wrong.",
         "",
-        "Finally, say for each part in the brief what that player does across the",
-        "piece. Use the exact partId given in brackets, one entry per part.",
+        "SOLOS. Give at least one player a real solo — four bars or more, exposed,",
+        "with the ensemble thinned out or silent underneath so it can actually be",
+        "heard. A 'solo' that everyone else plays through is not a solo. If the",
+        "ensemble is large, give two or three different players one each.",
+        "",
+        "DYNAMICS THAT TRAVEL. Fill dynamicPlan for the whole piece. Everything at",
+        "mf from start to finish is the single clearest sign a piece was generated",
+        "rather than written. Go somewhere near pp, go somewhere near ff, and put",
+        "in at least one sudden change — a subito piano, a surprise sforzando —",
+        "rather than only gradual swells.",
+        "",
+        "Finally, assign every part in the brief to one of the four skeleton",
+        "voices, with an octave displacement that puts it inside that player's",
+        "range. Use the exact partId given in brackets, one entry per part.",
+        "Spread them sensibly — a real orchestra has more than one instrument on",
+        "each line, high instruments on the upper voices, low ones on the bass —",
+        "and say in `role` whether the player carries that line plainly, decorates",
+        "it, sustains underneath it, or marks its rhythm.",
     ])
 
 
@@ -1136,10 +1209,16 @@ def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
         "THE THEME (concert pitch, for reference — transpose it as needed):",
         f"  {plan.get('theme', '')}",
         "",
-        "THE BASS LINE for the whole piece (concert pitch). Your part has to work",
-        "against this as well as against the chords — these two are the outer",
-        "edges of the harmony:",
-        f"  {plan.get('bass', '')}",
+        "THE SKELETON — the harmony of this piece written out in full, in CONCERT",
+        "pitch. Every instrument in the orchestra is playing one of these four",
+        "lines. This is what makes the ensemble agree, and your part is a",
+        "realisation of one of them, not a free line alongside them:",
+    ]
+    skeleton = plan.get("skeleton") or {}
+    for voice in ("soprano", "alto", "tenor", "bass"):
+        lines.append(f"  {voice:9}: {skeleton.get(voice, '')}")
+
+    lines += [
         "",
         "FORM:",
     ]
@@ -1156,6 +1235,29 @@ def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
         f"  {harmony}",
     ]
 
+    solos = plan.get("solos") or []
+    mine_ids = {part["partId"] for part in batch}
+    if solos:
+        lines += ["", "SOLOS IN THIS PIECE:"]
+        for solo in solos:
+            who = solo.get("partId")
+            mark = "  <- YOURS: write it to be heard" if who in mine_ids else ""
+            lines.append(f"  mm.{solo.get('fromMeasure')}-{solo.get('toMeasure')}: "
+                         f"[{who}] {solo.get('what')}{mark}")
+        lines.append("  If a solo above is not yours, get out of its way for those")
+        lines.append("  bars: rest, or hold something quiet and still underneath.")
+
+    dynamics = plan.get("dynamicPlan") or []
+    if dynamics:
+        lines += ["", "DYNAMICS — the whole ensemble follows this shape. Mark it in",
+                        "your part with !pp! !p! !mp! !mf! !f! !ff!, hairpins",
+                        "(!crescendo(! … !crescendo)!) and accents, and actually write",
+                        "to it: thin your line and sit low in the register where it is",
+                        "quiet, fill out and climb where it is loud."]
+        for band in dynamics:
+            lines.append(f"  mm.{band.get('fromMeasure')}-{band.get('toMeasure')}: "
+                         f"{band.get('level')} — {band.get('shape')}")
+
     leads = plan.get("melodyLead") or []
     if leads:
         lines += ["", "WHO HAS THE TUNE, AND WHERE:"]
@@ -1171,6 +1273,8 @@ def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
         mine = " <- WRITE THIS ONE" if part in batch else ""
         lines.append(f"  [{part['partId']}] {part['label']} — {role}{mine}")
 
+    assigned = {entry["partId"]: entry for entry in plan.get("partPlan") or []}
+
     lines += ["", f"WRITE THESE {len(batch)} PART(S) NOW, AND ONLY THESE:"]
     for part in batch:
         transposition = TRANSPOSITION_TEXT.get(
@@ -1180,8 +1284,18 @@ def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
         if part["staves"] == 2:
             detail.append("GRAND STAFF: right hand in \"abc\", left hand in \"abcLower\"")
         lines.append(f"  [{part['partId']}] {part['label']} — " + "; ".join(detail))
-        if plans.get(part["partId"]):
-            lines.append(f"      its role: {plans[part['partId']]}")
+
+        spec = assigned.get(part["partId"]) or {}
+        voice = spec.get("voice")
+        if voice:
+            octave = spec.get("octave") or 0
+            where = ("at pitch" if not octave else
+                     f"{abs(octave)} octave{'s' if abs(octave) > 1 else ''} "
+                     f"{'up' if octave > 0 else 'down'}")
+            lines.append(f"      PLAYS THE {voice.upper()} LINE, {where}, "
+                         f"then transposed for the instrument.")
+        if spec.get("role"):
+            lines.append(f"      its role: {spec['role']}")
 
     level = options.LEVELS_BY_VALUE[request["level"]]
     lines += [
@@ -1196,24 +1310,39 @@ def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
         "    in \"abcKey\".",
         "  * Return ONLY the parts listed immediately above. Nothing else.",
         "",
+        "THE ONE RULE THAT MATTERS MOST",
+        "  Your pitches come from your assigned skeleton voice. Other players are",
+        "  writing their parts at the same time as you, from the same skeleton,",
+        "  and none of you can hear each other — the skeleton is the only thing",
+        "  keeping the ensemble in tune with itself.",
+        "  * On every strong beat you must be on your voice's note for that beat",
+        "    (or another note of that bar's chord). Not near it. On it.",
+        "  * Between those, you may decorate: repeat the note, sustain it, or pass",
+        "    stepwise to the next one. A passing note falls on a weak beat and",
+        "    resolves by step into the skeleton note that follows it.",
+        "  * Never invent a pitch outside the chord on a strong beat, however good",
+        "    it sounds on its own. Alone it is a colour; against eleven other",
+        "    parts doing the same thing it is a crunch.",
+        "  * Octave displacement is fine and expected. Changing the note is not.",
+        "",
         "WRITING A LINE RATHER THAN FILLING A SLOT",
-        "  These are the things that make generated music sound generated. Avoid",
-        "  all of them.",
-        "  * Move by step. When the chord changes, go to the nearest note of the",
-        "    new chord and keep any note the two chords share. Leaping to the root",
-        "    every bar is what makes a part sound typed rather than written.",
-        "  * No parallel fifths or octaves with the bass line above, and do not",
-        "    double the leading note. Resolve a seventh downward by step.",
-        "  * Give the part its own rhythm. If it moves in the same values at the",
-        "    same moments as the theme, it is wallpaper. Enter off the beat,",
-        "    sustain through a bar someone else is busy in, answer a phrase.",
+        "  Within that, make it music rather than wallpaper.",
+        "  * Move by step wherever the skeleton lets you, and keep common tones",
+        "    when the chord changes.",
+        "  * Give the part its own RHYTHM — that is where your freedom is. Enter",
+        "    off the beat, sustain through a bar someone else is busy in, answer a",
+        "    phrase. Independent rhythm over shared harmony is what an orchestra",
+        "    sounds like; independent harmony is what a pile-up sounds like.",
         "  * Rest. A part that plays every bar from first to last flattens the",
         "    piece; silence is how an entry gets heard.",
         "  * Phrase in fours or eights, and breathe at the seams — wind and brass",
         "    players physically have to, and a string line that never lifts sounds",
         "    mechanical.",
-        "  * Shape it: mark dynamics and articulation where they mean something,",
-        "    not uniformly.",
+        "  * Shape it. Follow the dynamic plan above and mark it clearly — a part",
+        "    marked mf from the first bar to the last is the sound of a machine.",
+        "    Where the plan says quiet, write fewer notes in a lower register;",
+        "    where it says loud, write a fuller line. Articulation too: slur what",
+        "    sings, detach what drives.",
     ]
     return "\n".join(lines)
 
@@ -1317,22 +1446,39 @@ def _write_batch(plan: dict, request: dict, roster: list, batch: list, model: st
 
 def _write_batch_insisting(plan: dict, request: dict, roster: list, batch: list,
                            model: str) -> list:
-    """A batch, asked twice if it comes back short.
+    """A batch, asked twice if it comes back short — and never fatal.
 
-    A batch occasionally returns an empty list or skips a part. Left alone that
-    silently costs the score a whole section, so the gap is asked for again
-    before anyone sees it — once, because a second empty answer means something
-    is wrong that retrying will not fix.
+    A batch occasionally returns an empty list, skips a part, or fails outright.
+    Any of those used to lose the entire piece: after five minutes of planning
+    and three batches of good music, one bad call threw all of it away and the
+    user got "request failed" and nothing else.
+
+    So a batch failure costs only that batch. It is retried once, and if it
+    still will not come, the parts it owed are reported as missing and the rest
+    of the score is delivered. A piece short two lines is worth incomparably
+    more than no piece at all.
     """
-    written = _write_batch(plan, request, roster, batch, model)
+    written, why = [], None
+    try:
+        written = _write_batch(plan, request, roster, batch, model)
+    except ComposerError as error:
+        why = error
+        _log.warning("A batch failed, retrying it: %s", error)
+
     done = {row["partId"] for row in written}
     still_missing = [part for part in batch if part["partId"] not in done]
     if still_missing:
-        written += _write_batch(plan, request, roster, still_missing, model)
-    return written
+        try:
+            written += _write_batch(plan, request, roster, still_missing, model)
+            why = None
+        except ComposerError as error:
+            why = error
+            _log.warning("A batch failed twice; its parts will be missing: %s", error)
+    return written, why
 
 
-def _write_parts(plan: dict, request: dict, roster: list, model: str) -> list:
+def _write_parts(plan: dict, request: dict, roster: list, model: str,
+                 report=None) -> tuple:
     """Second pass: the staves, a few at a time, against the shared plan.
 
     The batches go out together rather than one after another. They do not need
@@ -1342,34 +1488,67 @@ def _write_parts(plan: dict, request: dict, roster: list, model: str) -> list:
     """
     size = _batch_size(plan.get("measureCount") or 32)
     batches = [roster[i:i + size] for i in range(0, len(roster), size)]
+    if report:
+        report("writing", 0, len(batches))
 
     if len(batches) == 1:
-        return _write_batch_insisting(plan, request, roster, batches[0], model)
+        done, why = _write_batch_insisting(plan, request, roster, batches[0], model)
+        if report:
+            report("writing", 1, 1)
+        return done, [why] if why else []
 
     written: list = []
+    failures: list = []
+    finished = 0
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
         futures = {pool.submit(_write_batch_insisting, plan, request, roster,
                                batch, model): batch
                    for batch in batches}
-        for future in futures:
-            written += future.result()
+        for future in as_completed(futures):
+            part_of_it, why = future.result()
+            written += part_of_it
+            if why:
+                failures.append(why)
+            finished += 1
+            if report:
+                report("writing", finished, len(batches))
 
     # Back into the order the player expects to read them in.
     order = {part["partId"]: index for index, part in enumerate(roster)}
-    return sorted(written, key=lambda row: order.get(row["partId"], 0))
+    return sorted(written, key=lambda row: order.get(row["partId"], 0)), failures
 
 
-def compose(request: dict) -> dict:
+def compose(request: dict, report=None) -> dict:
     """Generate a score. ``request`` must already have passed validation.
 
     Two passes: plan the piece, then write the parts a few at a time into it.
     See the note above PLAN_SCHEMA for why it is not done in one.
+
+    ``report(stage, done, total)`` is called as the work proceeds, so the browser
+    can say what is actually happening instead of guessing at a duration. This
+    takes minutes for a large ensemble and a progress bar that is telling the
+    truth is worth more than an estimate that isn't.
     """
     roster = build_roster(request["instruments"])
     model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
 
+    if report:
+        report("planning", 0, 1)
     plan = _plan(request, roster, model)
-    written = _write_parts(plan, request, roster, model)
+    if report:
+        report("planning", 1, 1)
+
+    written, failures = _write_parts(plan, request, roster, model, report)
+    if not written:
+        # Nothing at all came back, so there is no score to hand over. Say why
+        # if we know: "it was cut off, try fewer bars" is actionable in a way
+        # that "it didn't work" is not.
+        reason = str(failures[0]) if failures else (
+            "nothing came back from the generator")
+        raise ComposerError(
+            f"The parts couldn't be written this time — {reason[0].lower()}{reason[1:]} "
+            "The plan itself was fine, so trying again usually works.",
+            status=502)
 
     score = {
         **{key: plan.get(key) for key in ("title", "tempoText", "tempoBpm", "beatUnit",
@@ -1381,13 +1560,17 @@ def compose(request: dict) -> dict:
 
     # Add the bars up ourselves. If they don't work, give the model one chance to
     # fix its own arithmetic before we hand anything to a player.
+    if report:
+        report("checking", 0, 1)
     problems = validate_notation(score, roster, request["level"])
+    if report:
+        report("checking", 1, 1)
     repaired = False
     if problems:
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": build_user_prompt(request, roster)}]
         try:
-            candidate = _repair(score, roster, problems, messages, model)
+            candidate = _repair(score, roster, problems, messages, model, report)
             remaining = validate_notation(candidate, roster, request["level"])
             # Only keep the repair if it actually helped.
             if len(remaining) < len(problems):
@@ -1400,6 +1583,9 @@ def compose(request: dict) -> dict:
     # the score the user is looking at.
     missing = [part["label"] for part in roster
                if not any(w["partId"] == part["partId"] for w in score["parts"])]
+
+    if report:
+        report("engraving", 1, 1)
 
     warnings = _describe(problems)
     if missing:

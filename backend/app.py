@@ -24,6 +24,7 @@ from werkzeug.exceptions import HTTPException
 
 import composer
 import library
+import progress
 import options
 import validators
 from firebase import db, init_firebase, require_auth
@@ -170,13 +171,28 @@ def register_routes(app: Flask) -> None:
             return jsonify({"message": "Please fix the highlighted fields.",
                             "errors": errors}), 400
 
+        # The client makes up an id and polls /api/compose/progress/<id> while it
+        # waits, so a six-minute request can say what it is doing.
+        request_id = str(data.get("requestId") or "")
+        roster_size = sum(int(e.get("parts", 1)) for e in data["instruments"])
+        progress.start(request_id, roster_size, progress.estimate_seconds(roster_size))
+
         try:
-            score = composer.compose(data)
+            score = composer.compose(
+                data,
+                report=lambda stage, done, total: progress.report(
+                    request_id, stage, done, total),
+            )
         except composer.ComposerError as error:
             # These messages are written to be shown to the user as-is: a missing
             # API key is a setup mistake and saying so beats a generic 500.
             app.logger.warning("Compose failed: %s", error)
+            progress.finish(request_id, error=str(error))
             return jsonify({"message": str(error)}), error.status
+        except Exception:
+            progress.finish(request_id, error="Something went wrong on our end.")
+            raise
+        progress.finish(request_id)
 
         brief = {
             "instruments": data["instruments"],
@@ -201,6 +217,27 @@ def register_routes(app: Flask) -> None:
             score_id = None
 
         return jsonify({"score": score, "scoreId": score_id, "request": brief}), 201
+
+    @app.get("/api/compose/progress/<request_id>")
+    @require_auth
+    def compose_progress(request_id):
+        """How far along a running generation is.
+
+        404 before the generation has registered itself, or long after it
+        finished — the client treats that as "no news" and keeps waiting rather
+        than as an error.
+        """
+        state = progress.read(request_id)
+        if state is None:
+            return jsonify({"message": "No generation with that id."}), 404
+        return jsonify(state)
+
+    @app.get("/api/compose/estimate")
+    @require_auth
+    def compose_estimate():
+        """What to tell someone before they press the button."""
+        parts = request.args.get("parts", type=int) or 1
+        return jsonify({"parts": parts, **progress.estimate_seconds(parts)})
 
     # ---------- the library and the gallery ----------
 
@@ -409,8 +446,16 @@ app = create_app()
 
 
 if __name__ == "__main__":
+    # The auto-reloader is off by default, and deliberately. Generation holds a
+    # request open for minutes; if a file is touched during one, the reloader
+    # restarts the interpreter mid-flight and the whole piece is lost with
+    # "cannot schedule new futures after interpreter shutdown" — minutes of the
+    # user's time and a paid model call, thrown away for an edit they did not
+    # make. Set FLASK_RELOAD=1 when editing backend code and nothing is running.
     app.run(
         host=os.environ.get("HOST", "127.0.0.1"),
         port=int(os.environ.get("PORT", 5001)),
         debug=os.environ.get("FLASK_DEBUG", "1") == "1",
+        use_reloader=os.environ.get("FLASK_RELOAD", "0") == "1",
+        threaded=True,
     )

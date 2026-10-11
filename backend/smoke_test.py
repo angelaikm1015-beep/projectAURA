@@ -355,6 +355,47 @@ check("  the plan is asked for before the parts",
       == ["plan", "parts"],
       [c.kwargs["response_format"]["json_schema"]["name"] for c in create.call_args_list])
 
+# Progress: a six-minute request has to be able to say what it is doing.
+import progress as progress_mod
+
+progress_mod.start("sm-1", 14, progress_mod.estimate_seconds(14))
+first = progress_mod.read("sm-1")
+check("a running generation reports a stage and a percent",
+      first["stage"] == "planning" and 0 <= first["percent"] < 100, first)
+check("  and an estimate that brackets a real 14-part run (313s)",
+      first["lowSeconds"] <= 313 <= first["highSeconds"],
+      (first["lowSeconds"], first["highSeconds"]))
+
+progress_mod.report("sm-1", "writing", 2, 4)
+mid = progress_mod.read("sm-1")
+check("  the bar advances as batches land", mid["percent"] > first["percent"],
+      (first["percent"], mid["percent"]))
+
+# Batches finish out of order; the bar must never go backwards.
+progress_mod.report("sm-1", "writing", 1, 4)
+check("  an out-of-order batch cannot rewind it",
+      progress_mod.read("sm-1")["percent"] == mid["percent"])
+
+progress_mod.finish("sm-1")
+end = progress_mod.read("sm-1")
+check("  finishing reads 100% and says so",
+      end["percent"] == 100 and end["remainingSeconds"] == 0 and end["label"] == "Finished", end)
+
+check("an unknown generation id is simply not found",
+      progress_mod.read("no-such-id") is None)
+
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}):
+    r = client.get("/api/compose/progress/no-such-id", headers=AUTHED)
+check("GET /api/compose/progress unknown -> 404", r.status_code == 404, r.status_code)
+
+r = client.get("/api/compose/progress/sm-1")
+check("GET /api/compose/progress no token -> 401", r.status_code == 401, r.status_code)
+
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}):
+    r = client.get("/api/compose/estimate?parts=24", headers=AUTHED)
+check("GET /api/compose/estimate -> a range, not a single promise",
+      r.status_code == 200 and r.json["lowSeconds"] < r.json["highSeconds"], r.json)
+
 # Structured Outputs must actually be requested, or the JSON parse is a coin flip.
 kwargs = create.call_args.kwargs
 check("  model asked for strict structured output",
@@ -421,10 +462,24 @@ check("an unsuccessful repair still delivers the score, with a warning",
 check("  the warning is written for a musician, not a parser",
       "won't line up" in r.json["score"]["warnings"][0], r.json["score"]["warnings"])
 
-# A truncated response is a failure, not a half-finished score.
-r, _ = call_with_model(COMPOSE, FakeCompletion(FAKE_MODEL_OUTPUT, finish_reason="length"))
-check("truncated generation -> 502 with an actionable message",
+# A batch that is cut off is retried once. If every batch fails there is no
+# score to deliver, and the reason has to survive into the message — "it was cut
+# off, try a shorter piece" is actionable where "it didn't work" is not.
+cut = lambda: FakeCompletion(FAKE_MODEL_OUTPUT, finish_reason="length")
+r, create = call_with_model(COMPOSE, cut(), cut())
+check("a cut-off batch is retried before giving up", create.call_count == 3,
+      create.call_count)
+check("  and total failure -> 502 naming the cause",
       r.status_code == 502 and "cut off" in r.json["message"], (r.status_code, r.json))
+
+# One bad batch out of several must not cost the whole piece.
+HALF = {"parts": [p for p in FAKE_MODEL_OUTPUT["parts"] if p["partId"] in ("P1", "P2")]}
+r, _ = call_with_model(COMPOSE, FakeCompletion(HALF), FakeCompletion({"parts": []}),
+                       FakeCompletion({"parts": []}))
+check("a partly-written score is still delivered", r.status_code == 201, r.status_code)
+check("  with the missing players named",
+      any("missing from the score" in w for w in r.json["score"]["warnings"]),
+      r.json["score"]["warnings"])
 
 # Missing key is a setup mistake; say so instead of returning a generic 500.
 composer._client = None

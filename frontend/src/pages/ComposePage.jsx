@@ -17,16 +17,20 @@
  * without going back to the form at all.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { AppHeader, PageIntro } from "../components/app-header";
 import { FormMessage, SubmitButton } from "../components/chrome";
 import { ChoiceCards, SelectField, TextAreaField } from "../components/fields";
+import { GenerationProgress } from "../components/generation-progress";
 import { InstrumentPicker, totalParts } from "../components/instrument-picker";
 import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
-import { ApiError, compose, fetchOptions, reviseScore, undoRevision, updateScore } from "../lib/api";
+import {
+  ApiError, compose, fetchComposeEstimate, fetchComposeProgress, fetchOptions,
+  reviseScore, undoRevision, updateScore,
+} from "../lib/api";
 import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
 
@@ -56,9 +60,9 @@ const CONDUCTOR_CHOICES = [
   },
 ];
 
-// Shown in turn while the model works, so a two-minute wait reads as progress
-// rather than a hang. The order follows what the backend actually does: it
-// plans the piece first, then writes the parts into that plan.
+// Only used for the second or two before the server's first progress report
+// arrives. After that the page shows what is really happening rather than a
+// rotating guess.
 const WAIT_STEPS = [
   "Reading the brief…",
   "Choosing a key and tempo for the mood…",
@@ -80,6 +84,10 @@ export default function ComposePage() {
   const [message, setMessage] = useState(null);
   const [pending, setPending] = useState(false);
   const [step, setStep] = useState(0);
+  const [progress, setProgress] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [estimate, setEstimate] = useState(null);
+  const requestId = useRef(null);
   const [score, setScore] = useState(null);
   const [brief, setBrief] = useState(null);
   const [saved, setSaved] = useState(null); // { id, visibility } once it is stored
@@ -107,6 +115,46 @@ export default function ComposePage() {
     );
     return () => clearInterval(timer);
   }, [pending]);
+
+  // A ticking clock the user can see, independent of the server poll.
+  useEffect(() => {
+    if (!pending) return undefined;
+    setElapsed(0);
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed((Date.now() - started) / 1000), 500);
+    return () => clearInterval(timer);
+  }, [pending]);
+
+  // Ask the server where it has got to. A 404 just means it hasn't registered
+  // the job yet, or it has already finished — neither is worth showing.
+  useEffect(() => {
+    if (!pending || !requestId.current) return undefined;
+    let stopped = false;
+    const id = requestId.current;
+
+    const poll = async () => {
+      try {
+        const state = await fetchComposeProgress(id);
+        if (!stopped) setProgress(state);
+      } catch {
+        /* not registered yet, or gone */
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 2500);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [pending]);
+
+  // What to promise before the button is pressed, keyed to the actual roster.
+  const plannedParts = totalParts(values.instruments);
+  useEffect(() => {
+    if (!plannedParts) { setEstimate(null); return undefined; }
+    let cancelled = false;
+    fetchComposeEstimate(plannedParts)
+      .then((range) => { if (!cancelled) setEstimate(range); })
+      .catch(() => { /* the button still works without a promise attached */ });
+    return () => { cancelled = true; };
+  }, [plannedParts]);
 
   const set = (field) => (event) => {
     const { value } = event.target;
@@ -148,9 +196,11 @@ export default function ComposePage() {
 
   async function runCompose(sent) {
     setMessage(null);
+    setProgress(null);
+    requestId.current = (crypto.randomUUID?.() ?? String(Date.now() + Math.random()));
     setPending(true);
     try {
-      const result = await compose(sent);
+      const result = await compose({ ...sent, requestId: requestId.current });
       setScore(result.score);
       setBrief(describeBrief(options, sent));
       // The API saves every piece as it makes it. Without an id the score is
@@ -363,9 +413,19 @@ export default function ComposePage() {
         </SubmitButton>
 
         {pending && (
-          <p className="hint hint-standalone" aria-live="polite">
-            Writing {totalParts(values.instruments)} parts takes a minute or two — every bar gets
-            checked and corrected before you see it. Keep this tab open.
+          <GenerationProgress
+            progress={progress}
+            elapsed={elapsed}
+            fallbackLabel={WAIT_STEPS[step]}
+          />
+        )}
+
+        {!pending && estimate && plannedParts > 0 && (
+          <p className="hint hint-standalone">
+            {plannedParts} part{plannedParts === 1 ? "" : "s"} usually takes{" "}
+            <strong>{Math.round(estimate.lowSeconds / 60)}–
+            {Math.round(estimate.highSeconds / 60)} minutes</strong> — every bar of
+            every part is written, then checked and corrected before you see it.
           </p>
         )}
       </form>

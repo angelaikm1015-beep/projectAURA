@@ -64,6 +64,18 @@ export const updateMe = (updates) =>
 export const compose = (payload) =>
   request("/api/compose", { method: "POST", body: payload, authenticated: true });
 
+/**
+ * How far a running generation has got. The id is one the client made up and
+ * sent with the compose request. A 404 means "not registered yet, or long
+ * finished" — the caller treats that as no news rather than as a failure.
+ */
+export const fetchComposeProgress = (requestId) =>
+  request(`/api/compose/progress/${requestId}`, { authenticated: true });
+
+/** How long a piece of this size usually takes, as a range. */
+export const fetchComposeEstimate = (parts) =>
+  request(`/api/compose/estimate?parts=${parts}`, { authenticated: true });
+
 /* ---------- the library and the gallery ----------
  *
  * Every generated piece is saved automatically, private, at the moment it is

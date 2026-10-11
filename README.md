@@ -53,7 +53,7 @@ python backend/app.py                     # http://localhost:5001
 `backend/.env` needs an `OPENAI_API_KEY` as well as the Firebase settings, or
 `/compose` will return a 503 telling you so. Get one from
 [platform.openai.com/api-keys](https://platform.openai.com/api-keys); the account
-needs billing enabled. `OPENAI_MODEL` defaults to `gpt-5.6-sol` and can be any model
+needs billing enabled. `OPENAI_MODEL` defaults to `gpt-6.1-sol` and can be any model
 that supports Structured Outputs — see [Choosing a model](#choosing-a-model).
 
 > Port 5001, not 5000 — on macOS, Control Center's AirPlay Receiver listens on
@@ -99,6 +99,8 @@ firebase deploy --only firestore:rules
 | `GET` | `/api/me` | Bearer | The signed-in user's profile |
 | `PATCH` | `/api/me` | Bearer | Update profile fields (not email/password) |
 | `POST` | `/api/compose` | Bearer | Generate a score, save it to the library, return it with its `scoreId`. Slow — 30–120s — and it spends money, hence the auth. |
+| `GET` | `/api/compose/progress/<id>` | Bearer | How far a running generation has got: stage, percent, elapsed, time left |
+| `GET` | `/api/compose/estimate?parts=N` | Bearer | How long a piece of that size usually takes, as a range |
 | `GET` | `/api/scores` | Bearer | The signed-in user's library, newest first (summaries only) |
 | `PATCH` | `/api/scores` | Bearer | Share, or unshare, the whole library at once |
 | `GET` | `/api/scores/<id>` | Bearer | One saved score in full — the owner's, or anyone's shared piece |
