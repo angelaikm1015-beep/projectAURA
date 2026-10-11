@@ -19,6 +19,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import abcjs from "abcjs";
 
+import { SOUNDFONT_URL } from "../lib/soundfont";
+
 const slug = (text) =>
   String(text || "score").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -228,7 +230,11 @@ function usePlayer(tune, abc) {
 
     const voicesOff = [...silenced].flatMap((partId) => voicesByPart[partId] || []);
     const synth = new abcjs.synth.CreateSynth();
-    await synth.init({ audioContext, visualObj: tune, options: { voicesOff } });
+    await synth.init({
+      audioContext,
+      visualObj: tune,
+      options: { voicesOff, soundFontUrl: SOUNDFONT_URL },
+    });
     await synth.prime();
     synthRef.current = synth;
     if (startAtSec) synth.seek(startAtSec, "seconds");

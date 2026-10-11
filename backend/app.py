@@ -190,9 +190,13 @@ def register_routes(app: Flask) -> None:
         # Save before answering. A piece that reached the browser but not the
         # database is a piece the user loses by closing a tab, and it cost a
         # slow, paid model call to make.
+        # Anything at all: a Firestore outage, a credential problem, a bug in
+        # here. The music already exists and already cost a slow, paid call, so
+        # it goes back to the browser either way — without an id it simply
+        # can't be shared. Throwing a 500 would discard it instead.
         try:
             score_id = library.save(g.uid, _display_name(), score, brief)
-        except google_exceptions.GoogleAPIError:
+        except Exception:
             app.logger.exception("Could not save the generated score")
             score_id = None
 

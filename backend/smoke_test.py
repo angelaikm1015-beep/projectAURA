@@ -261,10 +261,27 @@ check("POST /api/compose non-boolean conductor -> 400",
       r.status_code == 400 and "conductor" in r.json["errors"], r.json)
 
 # Happy path, with the model call stubbed — no network, no API key needed.
-FAKE_MODEL_OUTPUT = {
+#
+# Generation is two passes now: a plan, then the parts a few at a time. The fake
+# answers whichever schema the call asked for, so the stub follows the real
+# control flow instead of pretending it is still one request.
+FAKE_PLAN = {
     "title": "Sunrise Run", "tempoText": "Allegro", "tempoBpm": 120, "beatUnit": "1/4",
     "timeSignature": "4/4", "concertKey": "G major", "measureCount": 2,
     "programNote": "A bright opener.", "rehearsalTips": "Watch the pickup.",
+    "theme": "G2 A2 B2 c2 | d8 |",
+    "sections": [{"name": "A", "fromMeasure": 1, "toMeasure": 2,
+                  "description": "Statement."}],
+    "harmony": [{"measure": 1, "chord": "G"}, {"measure": 2, "chord": "D"}],
+    "partPlan": [{"partId": f"P{i}", "role": "melody" if i == 1 else "harmony"}
+                 for i in range(1, 6)],
+    "conductor": {"overview": "Keep it buoyant.", "gestures": "Light 4.",
+                  "tempoMap": [{"measure": 1, "marking": "Allegro", "bpm": 120}],
+                  "cues": [{"measure": 1, "part": "Oboe", "text": "Breathe together."}],
+                  "rehearsalMarks": [{"measure": 1, "label": "A", "note": "Balance."}]},
+}
+
+FAKE_MODEL_OUTPUT = {
     "parts": [
         {"partId": "P1", "abcKey": "G", "abc": "G2 A2 B2 c2 | d8 |",
          "abcLower": None, "performanceNote": "Lead."},
@@ -277,10 +294,6 @@ FAKE_MODEL_OUTPUT = {
         {"partId": "P5", "abcKey": "G", "abc": "[GBd]4 [Ace]4 | [GBd]8 |",
          "abcLower": "G,,4 D,,4 | G,,8 |", "performanceNote": "Light."},
     ],
-    "conductor": {"overview": "Keep it buoyant.", "gestures": "Light 4.",
-                  "tempoMap": [{"measure": 1, "marking": "Allegro", "bpm": 120}],
-                  "cues": [{"measure": 1, "part": "Oboe", "text": "Breathe together."}],
-                  "rehearsalMarks": [{"measure": 1, "label": "A", "note": "Balance."}]},
 }
 
 class FakeCompletion:
@@ -290,11 +303,23 @@ class FakeCompletion:
 
 import json
 
-def call_with_model(payload, *completions):
-    """Drive one request, handing back `completions` in order (first = the
-    initial generation, second = the repair round, if one happens)."""
+def call_with_model(payload, *part_completions, plan=None):
+    """Drive one request through both passes.
+
+    The plan call is answered from `plan`; every call that asks for parts is
+    answered from `part_completions` in order (first = the writing pass, second
+    = the repair round, if one happens).
+    """
+    remaining = list(part_completions)
+
+    def answer(**kwargs):
+        name = kwargs["response_format"]["json_schema"]["name"]
+        if name == "plan":
+            return FakeCompletion(plan if plan is not None else FAKE_PLAN)
+        return remaining.pop(0)
+
     fake_client = mock.Mock()
-    fake_client.chat.completions.create.side_effect = list(completions)
+    fake_client.chat.completions.create.side_effect = answer
     with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
          mock.patch.object(composer, "client", return_value=fake_client):
         response = client.post("/api/compose", json=payload, headers=AUTHED)
@@ -323,8 +348,12 @@ check("  each part is a standalone tune",
 check("  a single part contains only its own voice",
       "V:P2" not in score["parts"][0]["abc"], score["parts"][0]["abc"][:200])
 check("  no warnings when every bar adds up", score.get("warnings") == [], score.get("warnings"))
-check("  a clean score is not sent for repair", create.call_count == 1, create.call_count)
+check("  a clean score is not sent for repair", create.call_count == 2, create.call_count)
 check("  conductor material returned", bool(score.get("conductor")), score.get("conductor"))
+check("  the plan is asked for before the parts",
+      [c.kwargs["response_format"]["json_schema"]["name"] for c in create.call_args_list]
+      == ["plan", "parts"],
+      [c.kwargs["response_format"]["json_schema"]["name"] for c in create.call_args_list])
 
 # Structured Outputs must actually be requested, or the JSON parse is a coin flip.
 kwargs = create.call_args.kwargs
@@ -374,8 +403,8 @@ check("the same notes are allowed when the level permits the full range",
 
 # Bad first draft, good repair -> the user gets a correct score and no warning.
 r, create = call_with_model(COMPOSE, FakeCompletion(short), FakeCompletion(FAKE_MODEL_OUTPUT))
-check("a defective score triggers exactly one repair round",
-      r.status_code == 201 and create.call_count == 2, create.call_count)
+check("a defective score is written, then repaired, after one plan",
+      r.status_code == 201 and create.call_count == 3, create.call_count)
 check("  the repair brief tells the model which bar is wrong",
       "every part must have exactly 2" in create.call_args.kwargs["messages"][-1]["content"],
       create.call_args.kwargs["messages"][-1]["content"][:200])
@@ -430,9 +459,12 @@ def walk_schema(node, path="$", found=None):
         walk_schema(node.get("items", {}), f"{path}[]", found)
     return found
 
-schema_problems = walk_schema(composer.RESPONSE_SCHEMA)
-check("response schema is valid for strict Structured Outputs",
-      not schema_problems, schema_problems)
+# Every schema that actually gets sent, not just one of them: strict mode
+# rejects the whole request if any property is missing from "required".
+for schema_name in ("PLAN_SCHEMA", "BATCH_SCHEMA", "REPAIR_SCHEMA", "REVISION_SCHEMA"):
+    schema_problems = walk_schema(getattr(composer, schema_name))
+    check(f"{schema_name} is valid for strict Structured Outputs",
+          not schema_problems, schema_problems)
 
 # OPENAI_MODEL is user-configurable and model families disagree about
 # max_tokens/temperature. An unsupported parameter must be dropped and retried,
@@ -450,7 +482,8 @@ class PickyCompletions:
         if kw.get("temperature", 1) != 1:
             raise composer.OpenAIError(
                 "Unsupported value: 'temperature' does not support 0.8 with this model.")
-        return FakeCompletion(FAKE_MODEL_OUTPUT)
+        name = kw["response_format"]["json_schema"]["name"]
+        return FakeCompletion(FAKE_PLAN if name == "plan" else FAKE_MODEL_OUTPUT)
 
 picky = mock.Mock()
 picky.chat.completions = PickyCompletions()
@@ -459,10 +492,17 @@ with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "u
     r = client.post("/api/compose", json=COMPOSE, headers=AUTHED)
 check("model that rejects max_tokens/temperature still produces a score",
       r.status_code == 201, (r.status_code, r.json))
+# Generation makes several calls now — a plan, then the parts — and each one
+# has to negotiate the same way, so the sequence repeats rather than running once.
+RENAME_THEN_DROP = [["max_tokens", "temperature"],
+                    ["max_completion_tokens", "temperature"],
+                    ["max_completion_tokens"]]
 check("  max_tokens was renamed, then temperature dropped",
-      param_attempts == [["max_tokens", "temperature"],
-                         ["max_completion_tokens", "temperature"],
-                         ["max_completion_tokens"]], param_attempts)
+      param_attempts[:3] == RENAME_THEN_DROP, param_attempts)
+check("  and every later call negotiates the same way",
+      len(param_attempts) % 3 == 0
+      and all(param_attempts[i:i + 3] == RENAME_THEN_DROP
+              for i in range(0, len(param_attempts), 3)), param_attempts)
 
 class BadKey:
     def create(self, **kw):

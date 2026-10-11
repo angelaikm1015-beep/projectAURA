@@ -22,13 +22,17 @@ beginner flute part stays under G5.
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
-from openai import OpenAI, OpenAIError
+from openai import APIConnectionError, OpenAI, OpenAIError
 
 import abc_check
 import options
 
-DEFAULT_MODEL = "gpt-5.5"
+# Chosen by measurement, not by version number: against gpt-5.5 on the same
+# brief it wrote more varied lines, gave every part somewhere to rest, and
+# came back with no bar-counting defects at all. See README.
+DEFAULT_MODEL = "gpt-5.6-sol"
 
 # The unit note length every part is written in. Fixing it here means one
 # duration convention across the score: 1 = eighth, 2 = quarter, 4 = half.
@@ -42,6 +46,21 @@ UNIT_NOTE_LENGTH = "1/8"
 BASE_OUTPUT_TOKENS = 8000
 OUTPUT_TOKENS_PER_STAFF = 900
 MAX_OUTPUT_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "48000"))
+
+# Budgets for the two passes.
+#
+# The configured model is a reasoning model, so this ceiling covers the thinking
+# as well as the reply — a generous number is not the same as a generous answer,
+# which is why one giant request got truncated no matter how high it was set.
+# Keeping every reply small is what actually fixes it.
+# Measured on this model: a four-part score spent 8,148 tokens thinking and only
+# 3,240 writing. Reasoning is the larger half and it does not shrink as the reply
+# does, so every call needs room for both.
+PLAN_TOKENS = 20000           # the plan is prose and a chord grid: small reply, hard thinking
+BATCH_BUDGET = 5000           # visible notation expected from one batch
+REASONING_HEADROOM = 14000    # thinking, which shares the same allowance
+MAX_PARTS_PER_BATCH = 5
+MAX_CONCURRENT_BATCHES = 4
 
 
 def _token_budget(roster: list) -> int:
@@ -362,11 +381,6 @@ def build_user_prompt(request: dict, roster: list) -> str:
         lines += ["", "ALSO REQUESTED BY THE USER (honour this unless it contradicts "
                       "the level or range limits above):", f"  {request['notes']}"]
 
-    lines += [
-        "",
-        f"Return every one of the {len(roster)} parts, in the order listed, using "
-        "the exact partId given in brackets.",
-    ]
     return "\n".join(lines)
 
 
@@ -398,48 +412,119 @@ PART_SCHEMA = _obj({
 })
 
 
-RESPONSE_SCHEMA = _obj({
-    "title": {"type": "string", "description": "Title of the piece."},
-    "tempoText": {"type": "string", "description": "Italian tempo marking, e.g. 'Allegro con brio'."},
-    "tempoBpm": {"type": "integer", "description": "Beats per minute, 30-240."},
-    "beatUnit": {"type": "string", "enum": ["1/4", "1/2", "3/8", "1/8"],
-                 "description": "Note value that gets the beat, for the Q: field."},
-    "timeSignature": {"type": "string", "description": "e.g. '4/4', '3/4', '6/8'."},
-    "concertKey": {"type": "string", "description": "Sounding key, e.g. 'G major', 'D minor'."},
-    "measureCount": {"type": "integer", "description": "Measures in every part."},
-    "programNote": {"type": "string",
-                    "description": "2-4 sentences for the players: what the piece is "
-                                   "about and how the mood is achieved."},
-    "rehearsalTips": {"type": "string",
-                      "description": "2-3 sentences on what this group will find hardest."},
-    "parts": {"type": "array", "items": PART_SCHEMA},
-    "conductor": {
-        "type": ["object", "null"],
-        "properties": {
-            "overview": {"type": "string"},
-            "gestures": {"type": "string",
-                         "description": "Beat pattern, subdivision, left-hand use, "
-                                        "preparatory beats."},
-            "tempoMap": {"type": "array", "items": _obj({
-                "measure": {"type": "integer"},
-                "marking": {"type": "string"},
-                "bpm": {"type": "integer"},
-            })},
-            "cues": {"type": "array", "items": _obj({
-                "measure": {"type": "integer"},
-                "part": {"type": "string"},
-                "text": {"type": "string"},
-            })},
-            "rehearsalMarks": {"type": "array", "items": _obj({
-                "measure": {"type": "integer"},
-                "label": {"type": "string"},
-                "note": {"type": "string"},
-            })},
-        },
-        "required": ["overview", "gestures", "tempoMap", "cues", "rehearsalMarks"],
-        "additionalProperties": False,
+CONDUCTOR_SCHEMA = {
+    "type": ["object", "null"],
+    "properties": {
+        "overview": {"type": "string"},
+        "gestures": {"type": "string",
+                     "description": "Beat pattern, subdivision, left-hand use, "
+                                    "preparatory beats."},
+        "tempoMap": {"type": "array", "items": _obj({
+            "measure": {"type": "integer"},
+            "marking": {"type": "string"},
+            "bpm": {"type": "integer"},
+        })},
+        "cues": {"type": "array", "items": _obj({
+            "measure": {"type": "integer"},
+            "part": {"type": "string"},
+            "text": {"type": "string"},
+        })},
+        "rehearsalMarks": {"type": "array", "items": _obj({
+            "measure": {"type": "integer"},
+            "label": {"type": "string"},
+            "note": {"type": "string"},
+        })},
     },
+    "required": ["overview", "gestures", "tempoMap", "cues", "rehearsalMarks"],
+    "additionalProperties": False,
+}
+
+
+# ---------------------------------------------------------------------------
+# Two passes: plan the piece, then write the parts
+# ---------------------------------------------------------------------------
+#
+# Asking for a whole orchestral score in one reply does not work. The model has
+# to hold every decision and every stave in one answer, and the reply is cut off
+# partway through — worse with every instrument added, which is exactly when the
+# piece matters most. It is also the wrong shape of task: a composer does not
+# write twenty staves left to right, they settle the piece first and then write
+# the lines into it.
+#
+# So it goes in two passes. First a PLAN: key, tempo, form, and a chord for every
+# single bar — a page of text whatever the ensemble size. Then the PARTS, a few
+# at a time, each batch written against that same chord grid and against the
+# lines already written. Every reply is small enough to finish, and the parts fit
+# together because they were all written to the same harmony rather than
+# improvised alongside each other.
+
+CHORD_SCHEMA = _obj({
+    "measure": {"type": "integer", "description": "1-based measure number."},
+    "chord": {"type": "string",
+              "description": "Concert-pitch chord for that bar, e.g. 'G', 'D7', "
+                             "'Em', 'C/E', 'A7/C#'. One per measure, no gaps."},
 })
+
+SECTION_SCHEMA = _obj({
+    "name": {"type": "string", "description": "e.g. 'A', 'B', 'Coda'."},
+    "fromMeasure": {"type": "integer"},
+    "toMeasure": {"type": "integer"},
+    "description": {"type": "string",
+                    "description": "One sentence: what happens here and who leads."},
+})
+
+PART_PLAN_SCHEMA = _obj({
+    "partId": {"type": "string", "description": "Exactly the id given in the brief."},
+    "role": {"type": "string",
+             "description": "What this player does across the piece — melody, "
+                            "counter-melody, inner harmony, bass, rhythmic "
+                            "support — and where that changes."},
+})
+
+PLAN_SCHEMA = _obj({
+    "title": {"type": "string"},
+    "tempoText": {"type": "string", "description": "Italian tempo marking."},
+    "tempoBpm": {"type": "integer", "description": "Beats per minute, 30-240."},
+    "beatUnit": {"type": "string", "enum": ["1/4", "1/2", "3/8", "1/8"]},
+    "timeSignature": {"type": "string", "description": "e.g. '4/4', '3/4', '6/8'."},
+    "concertKey": {"type": "string",
+                   "description": "The sounding key the piece STARTS and ENDS in, "
+                                  "named in two or three words and nothing more: "
+                                  "'G major', 'D minor'. Describe any modulations in "
+                                  "programNote instead — this string is printed as a "
+                                  "label on the score."},
+    "measureCount": {"type": "integer", "description": "Measures in every part."},
+    "programNote": {"type": "string", "description": "2-4 sentences for the players."},
+    "rehearsalTips": {"type": "string", "description": "2-3 sentences."},
+    "theme": {"type": "string",
+              "description": "The main theme as ABC, in concert pitch, unaccompanied. "
+                             "Four to eight bars. This is the tune the piece is built "
+                             "from and other parts will be written against it."},
+    "bass": {"type": "string",
+             "description": "The bass line for the WHOLE piece as ABC, concert pitch, "
+                            "one line, measureCount bars. Not just the root of each "
+                            "chord: a line that moves, with inversions and passing "
+                            "notes where they help it walk. The outer parts decide "
+                            "how a piece sounds, so this is written here rather than "
+                            "left to whoever gets the bass part."},
+    "melodyLead": {"type": "array", "items": _obj({
+        "fromMeasure": {"type": "integer"},
+        "toMeasure": {"type": "integer"},
+        "partId": {"type": "string", "description": "Exactly the id given in the brief."},
+        "what": {"type": "string", "description": "What they have — theme, counter-melody, "
+                                                  "a solo, an answering phrase."},
+    }), "description": "Who carries the line, and where it is handed on. Cover the "
+                       "whole piece; the tune must not sit in one instrument throughout."},
+    "sections": {"type": "array", "items": SECTION_SCHEMA},
+    "harmony": {"type": "array", "items": CHORD_SCHEMA,
+                "description": "EXACTLY one entry per measure, 1 to measureCount."},
+    "partPlan": {"type": "array", "items": PART_PLAN_SCHEMA,
+                 "description": "One entry per part in the brief."},
+    "conductor": CONDUCTOR_SCHEMA,
+})
+
+# One batch of written parts.
+BATCH_SCHEMA = _obj({"parts": {"type": "array", "items": PART_SCHEMA}})
 
 
 # ---------------------------------------------------------------------------
@@ -614,86 +699,126 @@ def _parts_needing_repair(problems: list, roster: list) -> set:
     return needed
 
 
-def _repair(score: dict, roster: list, problems: list, messages: list, model: str) -> dict:
-    """One corrective round: hand the model its own defects and ask for a fix.
+def _defects_by_part(problems: list, roster: list) -> dict:
+    """{partId: [its defects]} — so each repair call only sees its own work."""
+    grouped = {}
+    for part in roster:
+        mine = [problem for problem in problems if problem.startswith(part["label"])]
+        if mine:
+            grouped[part["partId"]] = mine
+    return grouped
 
-    Kept to a single round on purpose. It reliably clears arithmetic slips, and
-    beyond that the model tends to start recomposing rather than correcting —
-    at which point a fresh generation is the better answer anyway.
-    """
-    broken = _parts_needing_repair(problems, roster)
-    if not broken:
-        return score
 
-    labels = [part["label"] for part in roster if part["partId"] in broken]
+def _repair_batch(score: dict, roster: list, grouped: dict, batch: list,
+                  model: str) -> list:
+    """Correct one handful of parts. Returns the rewritten lines, or none."""
+    by_id = {part["partId"]: part for part in roster}
+    current = {written["partId"]: written for written in score["parts"]}
     expected = abc_check.units_per_bar(score.get("timeSignature"), UNIT_NOTE_LENGTH)
-    shown = problems[:MAX_DEFECTS_SHOWN]
-    elided = len(problems) - len(shown)
 
     instruction = [
-        "The parts you just wrote do not add up. I counted them.",
+        "You wrote these parts and the bars do not add up. I counted them.",
         "",
         f"The time signature is {score['timeSignature']} and the unit note length is "
-        f"L:{UNIT_NOTE_LENGTH}, so EVERY bar must total exactly {abc_check._fmt(expected)} "
-        "units, where a plain letter is 1 unit, C2 is 2, C4 is 4, C/2 is a half.",
+        f"L:{UNIT_NOTE_LENGTH}, so EVERY bar must total exactly "
+        f"{abc_check._fmt(expected)} units, where a plain letter is 1 unit, C2 is 2, "
+        f"C4 is 4, C/2 is a half. Every part must end with exactly "
+        f"{score.get('measureCount')} bars.",
         "",
-        "DEFECTS:",
+        "THE PARTS TO CORRECT, AS THEY STAND:",
     ]
-    instruction += [f"  - {problem}" for problem in shown]
-    if elided > 0:
-        instruction.append(f"  ...and {elided} more of the same kind.")
+    for part_id in batch:
+        written = current.get(part_id, {})
+        instruction.append(f"  [{part_id}] {by_id[part_id]['label']} "
+                           f"(written key {written.get('abcKey')}):")
+        instruction.append(f"    {written.get('abc', '')}")
+        if written.get("abcLower"):
+            instruction.append(f"    lower staff: {written['abcLower']}")
+
+    instruction += ["", "WHAT IS WRONG WITH THEM:"]
+    for part_id in batch:
+        for problem in grouped.get(part_id, [])[:MAX_DEFECTS_SHOWN]:
+            instruction.append(f"  - {problem}")
+
     instruction += [
         "",
-        f"Rewrite only these parts: {', '.join(labels)}.",
+        "Correct the DURATIONS and any notes that are out of range. Keep the key, the "
+        "harmony and the character of what you already wrote — this is a correction, "
+        "not a rewrite. Where a bar is too long, shorten a note or drop a repeated "
+        "one; where it is too short, lengthen the last note of the bar. Add up every "
+        "bar before you return it.",
         "",
-        "Correct the DURATIONS and any notes that are out of range. Keep the key and "
-        "the character of what you "
-        "already wrote — this is a correction, not a rewrite. Where a bar is too long, "
-        "shorten notes or drop a repeated one; where it is too short, lengthen the last "
-        "note of the bar. Add up every bar before you return it, and make sure all parts "
-        "finish with the same number of bars.",
+        f"Return exactly these {len(batch)} part(s) and nothing else.",
     ]
 
-    completion = _create(
-        model=model,
-        messages=messages + [
-            {"role": "assistant", "content": json.dumps({"parts": score["parts"]})},
-            {"role": "user", "content": "\n".join(instruction)},
-        ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": {"name": "repaired_parts", "strict": True,
-                            "schema": REPAIR_SCHEMA},
-        },
-        temperature=0.2,
-        max_tokens=_token_budget(roster),
-    )
+    try:
+        completion = _create(
+            model=model,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT},
+                      {"role": "user", "content": "\n".join(instruction)}],
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "repaired_parts", "strict": True,
+                                             "schema": REPAIR_SCHEMA}},
+            temperature=0.2,
+            max_tokens=BATCH_BUDGET + REASONING_HEADROOM,
+        )
+    except OpenAIError:
+        return []
 
     if completion.choices[0].finish_reason == "length":
-        return score
+        return []
     try:
-        repaired = json.loads(completion.choices[0].message.content)["parts"]
+        returned = json.loads(completion.choices[0].message.content)["parts"]
     except (TypeError, ValueError, KeyError):
+        return []
+    return [row for row in returned if row.get("partId") in set(batch)]
+
+
+def _repair(score: dict, roster: list, problems: list, messages: list, model: str) -> dict:
+    """One corrective round, batched the same way the writing is.
+
+    Kept to a single round on purpose: it reliably clears arithmetic slips, and
+    beyond that the model starts recomposing rather than correcting, at which
+    point a fresh generation is the better answer anyway.
+
+    Batched for the same reason the writing is — a thirty-part score can have a
+    hundred defects, and asking for every broken part in one reply is how the
+    corrections themselves used to get truncated and silently dropped.
+    """
+    grouped = _defects_by_part(problems, roster)
+    if not grouped:
+        return score
+
+    broken = [part["partId"] for part in roster if part["partId"] in grouped]
+    size = _batch_size(score.get("measureCount") or 32)
+    batches = [broken[i:i + size] for i in range(0, len(broken), size)]
+
+    fixed: list = []
+    if len(batches) == 1:
+        fixed = _repair_batch(score, roster, grouped, batches[0], model)
+    else:
+        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
+            futures = [pool.submit(_repair_batch, score, roster, grouped, batch, model)
+                       for batch in batches]
+            for future in futures:
+                fixed += future.result()
+
+    if not fixed:
         return score
 
     merged = {written["partId"]: written for written in score["parts"]}
-    for written in repaired:
-        if written.get("partId") in broken:
-            merged[written["partId"]] = written
+    for written in fixed:
+        merged[written["partId"]] = written
     return {**score, "parts": [merged[part["partId"]] for part in roster
                                if part["partId"] in merged]}
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-# OPENAI_MODEL is configurable, and model families disagree about these two
-# parameters: some want max_completion_tokens instead of max_tokens, and the
-# reasoning models accept only the default temperature. Rather than keep a list
-# of model names that goes stale, take OpenAI at its word — it names the
-# offending parameter in the 400 — and retry without it.
-UNSUPPORTED_RE = re.compile(r"(?:Unsupported|Unrecognized|Invalid) (?:parameter|value)[^']*'([^']+)'")
+# Models disagree about parameters: some want max_completion_tokens instead of
+# max_tokens, and the reasoning models accept only the default temperature.
+# Rather than keep a list of model names that goes stale, take OpenAI at its
+# word — it names the offending parameter in the 400 — and retry without it.
+UNSUPPORTED_RE = re.compile(
+    r"(?:Unsupported|Unrecognized|Invalid) (?:parameter|value)[^']*'([^']+)'")
 
 RENAMES = {"max_tokens": "max_completion_tokens"}
 
@@ -958,48 +1083,309 @@ def revise(score: dict, request: dict, instruction: str) -> dict:
     }
 
 
-def compose(request: dict) -> dict:
-    """Generate a score. ``request`` must already have passed validation."""
-    roster = build_roster(request["instruments"])
-    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_user_prompt(request, roster)},
+def _plan_prompt(request: dict, roster: list) -> str:
+    """Ask for the piece itself — everything except the notes on the staves."""
+    return "\n".join([
+        build_user_prompt(request, roster),
+        "",
+        "YOUR JOB RIGHT NOW: plan the piece. Do NOT write the individual parts yet.",
+        "",
+        "Decide the title, key, time signature, tempo and length. Lay out the form",
+        "as sections, and give a chord for EVERY SINGLE MEASURE from 1 to the",
+        "measureCount you chose: that grid is what keeps a dozen independent",
+        "parts in the same harmony, so it cannot have gaps.",
+        "",
+        "Write the two lines that decide how the piece sounds, both in CONCERT",
+        "pitch, because everything else is written against them:",
+        "  * the THEME — unaccompanied, four to eight bars, a tune someone could",
+        "    sing back after hearing it once;",
+        "  * the BASS — the whole piece, bar for bar. Give it somewhere to walk:",
+        "    use inversions so it steps rather than leaping root to root, and",
+        "    let it move against the theme rather than with it.",
+        "",
+        "HARMONY THAT GOES SOMEWHERE. A chord grid that sits on I, IV and V is",
+        "what makes a piece sound generated. Use inversions, at least one",
+        "secondary dominant, a suspension or two that resolve, and get somewhere",
+        "genuinely different in the middle before coming home. Each chord should",
+        "sound like it was going to follow the one before it.",
+        "",
+        "Then: who has the tune, and where they hand it on — fill melodyLead so",
+        "it covers the whole piece. A piece where one instrument holds the melody",
+        "from bar 1 to the end is the commonest way this goes wrong.",
+        "",
+        "Finally, say for each part in the brief what that player does across the",
+        "piece. Use the exact partId given in brackets, one entry per part.",
+    ])
+
+
+def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
+    """Ask for a handful of parts, written into a piece that already exists."""
+    plans = {entry["partId"]: entry.get("role", "")
+             for entry in plan.get("partPlan") or []}
+    expected = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
+
+    harmony = " | ".join(f"{row['measure']}:{row['chord']}"
+                         for row in sorted(plan.get("harmony") or [],
+                                           key=lambda r: r.get("measure", 0)))
+
+    lines = [
+        f"THE PIECE: \"{plan['title']}\" — {plan['concertKey']}, "
+        f"{plan['timeSignature']}, {plan['tempoText']} ({plan['tempoBpm']} bpm), "
+        f"{plan['measureCount']} measures.",
+        "",
+        "THE THEME (concert pitch, for reference — transpose it as needed):",
+        f"  {plan.get('theme', '')}",
+        "",
+        "THE BASS LINE for the whole piece (concert pitch). Your part has to work",
+        "against this as well as against the chords — these two are the outer",
+        "edges of the harmony:",
+        f"  {plan.get('bass', '')}",
+        "",
+        "FORM:",
+    ]
+    for section in plan.get("sections") or []:
+        lines.append(f"  {section.get('name')}: measures {section.get('fromMeasure')}"
+                     f"-{section.get('toMeasure')} — {section.get('description')}")
+
+    lines += [
+        "",
+        "HARMONY — one chord per measure. Other players are writing their lines to",
+        "this same grid at the same time, so it is what makes the parts fit: every",
+        "note must belong to the chord of its measure, or be a passing note",
+        "resolving into it.",
+        f"  {harmony}",
     ]
 
+    leads = plan.get("melodyLead") or []
+    if leads:
+        lines += ["", "WHO HAS THE TUNE, AND WHERE:"]
+        for lead in leads:
+            lines.append(f"  mm.{lead.get('fromMeasure')}-{lead.get('toMeasure')}: "
+                         f"[{lead.get('partId')}] — {lead.get('what')}")
+        lines.append("  Where that is not you, stay out of the way: accompany, answer,")
+        lines.append("  or rest. Do not double the tune unless it says so.")
+
+    lines += ["", "EVERY PART IN THE PIECE, so you know what else is sounding:"]
+    for part in roster:
+        role = plans.get(part["partId"], "")
+        mine = " <- WRITE THIS ONE" if part in batch else ""
+        lines.append(f"  [{part['partId']}] {part['label']} — {role}{mine}")
+
+    lines += ["", f"WRITE THESE {len(batch)} PART(S) NOW, AND ONLY THESE:"]
+    for part in batch:
+        transposition = TRANSPOSITION_TEXT.get(
+            part["transpose"], f"sounds {part['transpose']} semitones from written")
+        detail = [f"clef {part['clef']}", transposition,
+                  _range_line(part, request["level"])]
+        if part["staves"] == 2:
+            detail.append("GRAND STAFF: right hand in \"abc\", left hand in \"abcLower\"")
+        lines.append(f"  [{part['partId']}] {part['label']} — " + "; ".join(detail))
+        if plans.get(part["partId"]):
+            lines.append(f"      its role: {plans[part['partId']]}")
+
+    level = options.LEVELS_BY_VALUE[request["level"]]
+    lines += [
+        "",
+        f"PLAYING LEVEL: {level['label']} — {level['guidance']}",
+        "",
+        "RULES",
+        f"  * Exactly {plan['measureCount']} measures per part, every bar totalling "
+        f"{abc_check._fmt(expected)} units at L:{UNIT_NOTE_LENGTH}. Count them.",
+        "  * A resting part still needs its bars written as full-bar rests.",
+        "  * Write TRANSPOSED (written) pitch, and report that part's written key",
+        "    in \"abcKey\".",
+        "  * Return ONLY the parts listed immediately above. Nothing else.",
+        "",
+        "WRITING A LINE RATHER THAN FILLING A SLOT",
+        "  These are the things that make generated music sound generated. Avoid",
+        "  all of them.",
+        "  * Move by step. When the chord changes, go to the nearest note of the",
+        "    new chord and keep any note the two chords share. Leaping to the root",
+        "    every bar is what makes a part sound typed rather than written.",
+        "  * No parallel fifths or octaves with the bass line above, and do not",
+        "    double the leading note. Resolve a seventh downward by step.",
+        "  * Give the part its own rhythm. If it moves in the same values at the",
+        "    same moments as the theme, it is wallpaper. Enter off the beat,",
+        "    sustain through a bar someone else is busy in, answer a phrase.",
+        "  * Rest. A part that plays every bar from first to last flattens the",
+        "    piece; silence is how an entry gets heard.",
+        "  * Phrase in fours or eights, and breathe at the seams — wind and brass",
+        "    players physically have to, and a string line that never lifts sounds",
+        "    mechanical.",
+        "  * Shape it: mark dynamics and articulation where they mean something,",
+        "    not uniformly.",
+    ]
+    return "\n".join(lines)
+
+
+def _plan(request: dict, roster: list, model: str) -> dict:
+    """First pass: settle the piece. Small reply whatever the ensemble size."""
     try:
         completion = _create(
             model=model,
-            messages=messages,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "score", "strict": True, "schema": RESPONSE_SCHEMA},
-            },
-            # Some warmth helps it commit to a real melodic idea; much more and
-            # the counting across parts starts to slip.
+            messages=[{"role": "system", "content": SYSTEM_PROMPT},
+                      {"role": "user", "content": _plan_prompt(request, roster)}],
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "plan", "strict": True,
+                                             "schema": PLAN_SCHEMA}},
             temperature=0.8,
-            max_tokens=_token_budget(roster),
+            max_tokens=PLAN_TOKENS,
         )
     except OpenAIError as error:
         raise ComposerError(_explain(error, model)) from error
 
-    choice = completion.choices[0]
-    if choice.finish_reason == "length":
-        raise ComposerError(
-            "The piece was cut off before it finished. Try fewer parts, or a "
-            "lower playing level so the piece is shorter.", status=502)
-
+    if completion.choices[0].finish_reason == "length":
+        raise ComposerError("The planner ran out of room. Try a shorter piece.", status=502)
     try:
-        score = json.loads(choice.message.content)
+        plan = json.loads(completion.choices[0].message.content)
     except (TypeError, ValueError) as error:
         raise ComposerError("The generator returned something we couldn't read. "
                             "Please try again.") from error
+
+    if not request["conductor"]:
+        plan["conductor"] = None
+    _tidy_labels(plan)
+    return plan
+
+
+METER_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\b")
+
+
+def _tidy_labels(plan: dict) -> None:
+    """Keep the two fields that are read as data from arriving as prose.
+
+    Asked for a time signature, the model sometimes answers with the whole plan
+    for it — "4/4; mm.17-24 in 7/8; mm.25-28 in 5/4". That string is written
+    straight into the ABC ``M:`` field and is also what every bar is measured
+    against, so a sentence there is not cosmetic: a piece whose meter reads
+    "6/8, with 5/8 episodes" gets silently checked as though it were 4/4, and
+    every bar in it is validated against the wrong length.
+    """
+    meter = METER_RE.search(str(plan.get("timeSignature") or ""))
+    plan["timeSignature"] = f"{meter.group(1)}/{meter.group(2)}" if meter else "4/4"
+
+    # The key is a label printed beside the title; modulations belong in the
+    # programme note, which is where the schema asks for them.
+    key = str(plan.get("concertKey") or "").strip()
+    key = re.split(r"[,;(]", key)[0]
+    key = METER_RE.sub("", key).strip().rstrip(".").strip()
+    plan["concertKey"] = key[:28] or "C major"
+
+
+def _batch_size(measure_count: int) -> int:
+    """How many parts one reply can finish comfortably.
+
+    A part is roughly twenty tokens a bar once the JSON wrapper is counted. The
+    budget is deliberately a fraction of what the model will allow, because the
+    whole point is that no single reply is anywhere near its ceiling.
+    """
+    per_part = max(200, measure_count * 22 + 150)
+    return max(1, min(MAX_PARTS_PER_BATCH, BATCH_BUDGET // per_part))
+
+
+def _write_batch(plan: dict, request: dict, roster: list, batch: list, model: str) -> list:
+    """One batch of parts. Raises ComposerError so a failure is reported, not silent."""
+    try:
+        completion = _create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _batch_prompt(plan, request, roster, batch)},
+            ],
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "parts", "strict": True,
+                                             "schema": BATCH_SCHEMA}},
+            temperature=0.7,
+            max_tokens=BATCH_BUDGET + REASONING_HEADROOM,
+        )
+    except OpenAIError as error:
+        raise ComposerError(_explain(error, model)) from error
+
+    if completion.choices[0].finish_reason == "length":
+        raise ComposerError(
+            "A part was cut off while being written. Try a shorter piece — the "
+            "number of instruments is no longer what limits this.", status=502)
+    try:
+        returned = json.loads(completion.choices[0].message.content)["parts"]
+    except (TypeError, ValueError, KeyError) as error:
+        raise ComposerError("The generator returned something we couldn't read. "
+                            "Please try again.") from error
+
+    wanted = {part["partId"] for part in batch}
+    return [row for row in returned if row.get("partId") in wanted]
+
+
+def _write_batch_insisting(plan: dict, request: dict, roster: list, batch: list,
+                           model: str) -> list:
+    """A batch, asked twice if it comes back short.
+
+    A batch occasionally returns an empty list or skips a part. Left alone that
+    silently costs the score a whole section, so the gap is asked for again
+    before anyone sees it — once, because a second empty answer means something
+    is wrong that retrying will not fix.
+    """
+    written = _write_batch(plan, request, roster, batch, model)
+    done = {row["partId"] for row in written}
+    still_missing = [part for part in batch if part["partId"] not in done]
+    if still_missing:
+        written += _write_batch(plan, request, roster, still_missing, model)
+    return written
+
+
+def _write_parts(plan: dict, request: dict, roster: list, model: str) -> list:
+    """Second pass: the staves, a few at a time, against the shared plan.
+
+    The batches go out together rather than one after another. They do not need
+    each other's output — the plan's theme, chord grid and list of roles is the
+    whole contract — so a twenty-part orchestra costs about the same wall-clock
+    time as a quartet instead of five times as much.
+    """
+    size = _batch_size(plan.get("measureCount") or 32)
+    batches = [roster[i:i + size] for i in range(0, len(roster), size)]
+
+    if len(batches) == 1:
+        return _write_batch_insisting(plan, request, roster, batches[0], model)
+
+    written: list = []
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
+        futures = {pool.submit(_write_batch_insisting, plan, request, roster,
+                               batch, model): batch
+                   for batch in batches}
+        for future in futures:
+            written += future.result()
+
+    # Back into the order the player expects to read them in.
+    order = {part["partId"]: index for index, part in enumerate(roster)}
+    return sorted(written, key=lambda row: order.get(row["partId"], 0))
+
+
+def compose(request: dict) -> dict:
+    """Generate a score. ``request`` must already have passed validation.
+
+    Two passes: plan the piece, then write the parts a few at a time into it.
+    See the note above PLAN_SCHEMA for why it is not done in one.
+    """
+    roster = build_roster(request["instruments"])
+    model = os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+
+    plan = _plan(request, roster, model)
+    written = _write_parts(plan, request, roster, model)
+
+    score = {
+        **{key: plan.get(key) for key in ("title", "tempoText", "tempoBpm", "beatUnit",
+                                          "timeSignature", "concertKey", "measureCount",
+                                          "programNote", "rehearsalTips")},
+        "conductor": plan.get("conductor") if request["conductor"] else None,
+        "parts": written,
+    }
 
     # Add the bars up ourselves. If they don't work, give the model one chance to
     # fix its own arithmetic before we hand anything to a player.
     problems = validate_notation(score, roster, request["level"])
     repaired = False
     if problems:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": build_user_prompt(request, roster)}]
         try:
             candidate = _repair(score, roster, problems, messages, model)
             remaining = validate_notation(candidate, roster, request["level"])
@@ -1008,6 +1394,17 @@ def compose(request: dict) -> dict:
                 score, problems, repaired = candidate, remaining, True
         except OpenAIError:
             pass  # The first score still stands; it just keeps its warnings.
+
+    # Decided here, not before the repair: a part that came back empty is often
+    # written by the repair round, and warning about it anyway would contradict
+    # the score the user is looking at.
+    missing = [part["label"] for part in roster
+               if not any(w["partId"] == part["partId"] for w in score["parts"])]
+
+    warnings = _describe(problems)
+    if missing:
+        warnings.append("These parts came back empty and are missing from the score: "
+                        + ", ".join(missing) + ". Generating again usually clears it.")
 
     return {
         "title": score["title"],
@@ -1022,7 +1419,7 @@ def compose(request: dict) -> dict:
         "measureCount": score["measureCount"],
         "programNote": score["programNote"],
         "rehearsalTips": score["rehearsalTips"],
-        "conductor": score.get("conductor") if request["conductor"] else None,
+        "conductor": score.get("conductor"),
         "scoreAbc": assemble_abc(score, roster),
         "parts": [
             {
@@ -1043,7 +1440,7 @@ def compose(request: dict) -> dict:
         # these lines; the assembled tunes above are built from them and cannot
         # be edited back into shape.
         "written": score["parts"],
-        "warnings": _describe(problems),
+        "warnings": warnings,
         "repaired": repaired,
         "model": model,
     }
@@ -1063,4 +1460,14 @@ def _explain(error, model) -> str:
                 "account. Set OPENAI_MODEL in backend/.env to one that is.")
     if "timeout" in text.lower():
         return ("The score took too long to write. Try again with fewer parts.")
+    # A bare "Connection error." from the SDK means the request never reached
+    # OpenAI at all. On a filtered network — a school or office one especially —
+    # the TLS handshake to api.openai.com is cut the moment the hostname is
+    # seen, which looks identical to being offline unless we say otherwise.
+    if isinstance(error, APIConnectionError) or "connection error" in text.lower():
+        return ("Couldn't reach OpenAI. The request never left this machine, so "
+                "this is a network problem rather than anything to do with the "
+                "music: check you're online, and if you're on a school or office "
+                "network, it may be blocking api.openai.com — a phone hotspot or "
+                "VPN is the usual way around it.")
     return f"The score generator failed: {text}"

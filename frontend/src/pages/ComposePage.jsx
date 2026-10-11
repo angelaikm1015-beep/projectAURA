@@ -57,13 +57,15 @@ const CONDUCTOR_CHOICES = [
 ];
 
 // Shown in turn while the model works, so a two-minute wait reads as progress
-// rather than a hang.
+// rather than a hang. The order follows what the backend actually does: it
+// plans the piece first, then writes the parts into that plan.
 const WAIT_STEPS = [
   "Reading the brief…",
   "Choosing a key and tempo for the mood…",
   "Writing the main theme…",
-  "Harmonising the other parts…",
-  "Writing out every part…",
+  "Working out the harmony, bar by bar…",
+  "Deciding what each player does…",
+  "Writing the parts…",
   "Adding up every bar…",
   "Correcting anything that doesn't fit…",
   "Engraving the sheets…",

@@ -53,7 +53,7 @@ python backend/app.py                     # http://localhost:5001
 `backend/.env` needs an `OPENAI_API_KEY` as well as the Firebase settings, or
 `/compose` will return a 503 telling you so. Get one from
 [platform.openai.com/api-keys](https://platform.openai.com/api-keys); the account
-needs billing enabled. `OPENAI_MODEL` defaults to `gpt-5.5` and can be any model
+needs billing enabled. `OPENAI_MODEL` defaults to `gpt-5.6-sol` and can be any model
 that supports Structured Outputs — see [Choosing a model](#choosing-a-model).
 
 > Port 5001, not 5000 — on macOS, Control Center's AirPlay Receiver listens on
@@ -188,11 +188,34 @@ python backend/generate_options.py
 There is no OpenAI endpoint that returns sheet music, so
 [backend/composer.py](backend/composer.py) does it in two halves.
 
-**The model writes notes.** One chat completion with **Structured Outputs**
-(`json_schema`, `strict: true`) returns a single JSON object: the shared score
-metadata, plus a block of **ABC notation** per part. ABC rather than MusicXML —
-MusicXML is far too verbose for a model to keep correct across a dozen staves,
-while ABC is compact enough that the model has attention left for the music.
+**The model plans, then writes.** Asking for a whole score in one reply does not
+work: the model has to hold every decision and every stave in one answer, and it
+gets cut off partway through — worse with every instrument added, which is
+exactly when the piece matters most. It is also the wrong shape of task. A
+composer doesn't write twenty staves left to right; they settle the piece first
+and then write the lines into it.
+
+So it goes in two passes, both using **Structured Outputs** (`json_schema`,
+`strict: true`):
+
+1. **The plan** — key, tempo, form, the main theme, what each player does, and a
+   chord for *every single bar*. A page of text whatever the ensemble size.
+2. **The parts** — written a few at a time, each batch against that same chord
+   grid. The batches go out concurrently because they don't need each other's
+   output: the grid is the whole contract. A twenty-part orchestra costs about
+   the same wall-clock time as a quartet.
+
+Every reply is small enough to finish, and the parts fit together because they
+were all written to the same harmony. The correction round is batched the same
+way, for the same reason. Notation is **ABC** rather than MusicXML — MusicXML is
+far too verbose for a model to keep correct across a dozen staves, while ABC is
+compact enough that the model has attention left for the music.
+
+The configured model is a reasoning model, which matters for sizing: a measured
+four-part score spent **8,148 tokens thinking and 3,240 writing**. Reasoning is
+the larger half and it doesn't shrink as the reply does, so a generous ceiling is
+not the same as a generous answer — keeping each reply small is what actually
+prevents truncation.
 
 **Python builds the score.** Headers, voice declarations, staff grouping, clefs,
 per-part key signatures and MIDI programs are assembled deterministically in

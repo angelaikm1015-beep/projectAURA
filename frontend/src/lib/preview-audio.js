@@ -12,6 +12,8 @@
 
 import abcjs from "abcjs";
 
+import { SOUNDFONT_URL } from "./soundfont";
+
 const LETTERS = ["C", "D", "E", "F", "G", "A", "B"];
 
 /** "F#4" / "Bb2" / "G3" -> { letter, accidental, octave }, or null. */
@@ -118,7 +120,7 @@ export async function previewInstrument(info) {
     audioContext,
     visualObj: tune,
     // The range is written pitch; this is what the audience actually hears.
-    options: { midiTranspose: info.transpose || 0 },
+    options: { midiTranspose: info.transpose || 0, soundFontUrl: SOUNDFONT_URL },
   });
   await synth.prime();
   current = synth;
