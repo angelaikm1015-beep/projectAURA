@@ -487,10 +487,18 @@ PART_PLAN_SCHEMA = _obj({
                "description": "Octave displacement from that skeleton voice, in "
                               "octaves: 0 at pitch, 1 an octave up, -1 an octave "
                               "down. Use it to put the line in the player's range."},
+    "treatment": {"type": "string", "enum": ["plain", "sustained", "decorated"],
+                  "description": "How freely this player treats its skeleton voice. "
+                                 "'plain' = the voice's own notes and rhythm, the "
+                                 "backbone of the ensemble. 'sustained' = the same "
+                                 "notes held long underneath. 'decorated' = free "
+                                 "rhythm and passing notes around them. Most of an "
+                                 "orchestra plays plain or sustained; only the few "
+                                 "players carrying the tune are decorated."},
     "role": {"type": "string",
              "description": "What this player does across the piece — carries the "
-                            "theme, decorates its voice, sustains it, or marks the "
-                            "rhythm of it — and where that changes."},
+                            "theme, fills the harmony, sustains underneath, or marks "
+                            "the rhythm — and where that changes."},
 })
 
 PLAN_SCHEMA = _obj({
@@ -1185,10 +1193,34 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "voices, with an octave displacement that puts it inside that player's",
         "range. Use the exact partId given in brackets, one entry per part.",
         "Spread them sensibly — a real orchestra has more than one instrument on",
-        "each line, high instruments on the upper voices, low ones on the bass —",
-        "and say in `role` whether the player carries that line plainly, decorates",
-        "it, sustains underneath it, or marks its rhythm.",
+        "each line, high instruments on the upper voices, low ones on the bass.",
+        "",
+        "Then set each player's `treatment`, and be sparing with 'decorated'.",
+        "This is the thing that decides whether the piece sounds like an orchestra",
+        "or like twelve people practising in one room. Every decorated part is",
+        "another line inventing notes of its own; a handful is colour, everybody",
+        "at once is noise. AT MOST A THIRD of the players may be 'decorated', and",
+        "they should be the ones carrying the tune. Everyone else is 'plain' or",
+        "'sustained' — and a plain part is not a lesser part: it is what makes the",
+        "chord sound.",
     ])
+
+
+# How much freedom a player has with its skeleton voice. Most of an orchestra
+# has very little, and that is the point: the chord only sounds if most of the
+# ensemble is actually playing it.
+TREATMENTS = {
+    "plain": ("TREATMENT: PLAIN — play your voice's notes, in its rhythm. You may "
+              "re-articulate a held note or rest where the dynamic plan thins the "
+              "texture, but do not add notes of your own. This is the backbone."),
+    "sustained": ("TREATMENT: SUSTAINED — play your voice's notes as long held "
+                  "values underneath the others, changing only when the harmony "
+                  "does. No passing notes at all."),
+    "decorated": ("TREATMENT: DECORATED — you may use free rhythm and stepwise "
+                  "passing notes around your voice, but you must be on its note "
+                  "on every strong beat. You are one of the few parts allowed "
+                  "this; the ensemble is relying on the rest being plain."),
+}
 
 
 def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
@@ -1294,6 +1326,7 @@ def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
                      f"{'up' if octave > 0 else 'down'}")
             lines.append(f"      PLAYS THE {voice.upper()} LINE, {where}, "
                          f"then transposed for the instrument.")
+        lines.append("      " + TREATMENTS.get(spec.get("treatment"), TREATMENTS["plain"]))
         if spec.get("role"):
             lines.append(f"      its role: {spec['role']}")
 
