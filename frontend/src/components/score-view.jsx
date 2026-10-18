@@ -203,8 +203,14 @@ function voiceIndexesByPart(abc) {
  */
 function usePlayer(tune, abc) {
   const synthRef = useRef(null);
+  // Where the audio is: the AudioContext clock time at which bar 1 would have
+  // started, and how long the whole piece lasts. Position is read from the
+  // audio clock rather than counted by a timer, so it cannot drift from what
+  // is actually sounding.
+  const clockRef = useRef(null);
   const [state, setState] = useState("idle"); // idle | loading | playing | error
   const [muted, setMuted] = useState(() => new Set());
+  const [elapsed, setElapsed] = useState(0);
   const supported = typeof abcjs.synth?.supportsAudio === "function" && abcjs.synth.supportsAudio();
 
   const voicesByPart = useMemo(() => voiceIndexesByPart(abc), [abc]);
@@ -220,7 +226,29 @@ function usePlayer(tune, abc) {
   useEffect(() => {
     setState("idle");
     setMuted(new Set());
+    setElapsed(0);
+    clockRef.current = null;
   }, [tune]);
+
+  // While it plays, follow the audio clock — and notice when the piece ends.
+  useEffect(() => {
+    if (state !== "playing") return undefined;
+    const timer = setInterval(() => {
+      const clock = clockRef.current;
+      if (!clock) return;
+      const at = clock.context.currentTime - clock.startedAt;
+      if (clock.duration && at >= clock.duration) {
+        synthRef.current?.stop();
+        synthRef.current = null;
+        clockRef.current = null;
+        setElapsed(0);
+        setState("idle");
+        return;
+      }
+      setElapsed(Math.max(0, at));
+    }, 200);
+    return () => clearInterval(timer);
+  }, [state]);
 
   async function build(silenced, startAtSec) {
     // The AudioContext has to be created inside the click, or browsers will
@@ -235,16 +263,38 @@ function usePlayer(tune, abc) {
       visualObj: tune,
       options: { voicesOff, soundFontUrl: SOUNDFONT_URL },
     });
-    await synth.prime();
+    const primed = await synth.prime();
     synthRef.current = synth;
     if (startAtSec) synth.seek(startAtSec, "seconds");
     synth.start();
+    clockRef.current = {
+      context: audioContext,
+      startedAt: audioContext.currentTime - (startAtSec || 0),
+      duration: primed?.duration || 0,
+    };
+    setElapsed(startAtSec || 0);
+  }
+
+  /** Start (or jump) to a point in the piece, in seconds. */
+  async function playFrom(seconds) {
+    synthRef.current?.stop();
+    synthRef.current = null;
+    setState("loading");
+    try {
+      await build(muted, seconds);
+      setState("playing");
+    } catch (error) {
+      console.warn("Playback failed:", error);
+      setState("error");
+    }
   }
 
   async function toggle() {
     if (state === "playing") {
       synthRef.current?.stop();
       synthRef.current = null;
+      clockRef.current = null;
+      setElapsed(0);
       setState("idle");
       return;
     }
@@ -275,7 +325,79 @@ function usePlayer(tune, abc) {
     }
   }
 
-  return { state, supported, toggle, muted, setMix };
+  // Generated pieces have no repeats or pickups, so the bar is simply the
+  // elapsed time over the length of one bar at the score's tempo.
+  const msPerMeasure = tune?.millisecondsPerMeasure?.() || 0;
+  const measure = state === "playing" && msPerMeasure
+    ? Math.floor((elapsed * 1000) / msPerMeasure) + 1
+    : 0;
+
+  function playFromMeasure(number) {
+    if (!msPerMeasure) return;
+    playFrom(((number - 1) * msPerMeasure) / 1000);
+  }
+
+  return { state, supported, toggle, muted, setMix, measure, playFromMeasure };
+}
+
+/*
+ * The form of the piece as a strip of blocks — one per section, as wide as it
+ * is long — with the one being played lit up as the music reaches it. A long
+ * piece is easy to lose your place in; this says where you are in its shape,
+ * not just which bar. Clicking a block plays from there.
+ */
+function FormTimeline({ sections, measureCount, player }) {
+  const total = measureCount || sections?.at(-1)?.toMeasure || 0;
+  if (!total || !player.supported) return null;
+  const blocks = sections?.length
+    ? sections
+    : [{ name: "Piece", fromMeasure: 1, toMeasure: total, description: "" }];
+
+  const { measure } = player;
+  const current = measure
+    ? blocks.find((block) => measure >= block.fromMeasure && measure <= block.toMeasure)
+    : null;
+
+  return (
+    <section className="form-timeline" aria-label="Form of the piece">
+      <p className="form-timeline__now" aria-live="polite">
+        {current ? (
+          <>
+            <span className="form-timeline__badge">Now playing</span>
+            <strong>{current.name}</strong>
+            {current.description && <span> — {current.description}</span>}
+            <span className="form-timeline__bar"> · bar {Math.min(measure, total)} of {total}</span>
+          </>
+        ) : (
+          <span>Form · {total} bars. Press Play, or pick a section to play from there.</span>
+        )}
+      </p>
+      <div className="form-timeline__strip">
+        {blocks.map((block) => {
+          const length = block.toMeasure - block.fromMeasure + 1;
+          const isNow = block === current;
+          const progress = isNow ? ((measure - block.fromMeasure + 0.5) / length) * 100 : 0;
+          return (
+            <button
+              key={`${block.name}-${block.fromMeasure}`}
+              type="button"
+              className={`form-timeline__block${isNow ? " is-now" : ""}`}
+              style={{ flexGrow: length }}
+              title={`${block.name}: bars ${block.fromMeasure}–${block.toMeasure}`
+                + (block.description ? ` — ${block.description}` : "")}
+              aria-current={isNow ? "step" : undefined}
+              onClick={() => player.playFromMeasure(block.fromMeasure)}
+              disabled={player.state === "loading"}
+            >
+              {isNow && <span className="form-timeline__fill" style={{ width: `${progress}%` }} />}
+              <span className="form-timeline__label">{block.name}</span>
+              <span className="form-timeline__range">{block.fromMeasure}–{block.toMeasure}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function PlayButton({ player, disabled }) {
@@ -914,6 +1036,11 @@ export function ScoreView({
         {active.note && <p className="score-partnote">{active.note}</p>}
 
         {active.nameEveryLine && <Mixer parts={score.parts} player={player} />}
+
+        {active.id !== "conductor" && (
+          <FormTimeline sections={score.sections} measureCount={score.measureCount}
+                        player={player} />
+        )}
 
         <div className="printable">
           <Sheet

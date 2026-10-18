@@ -262,26 +262,63 @@ check("POST /api/compose non-boolean conductor -> 400",
 
 # Happy path, with the model call stubbed — no network, no API key needed.
 #
-# Generation is two passes now: a plan, then the parts a few at a time. The fake
-# answers whichever schema the call asked for, so the stub follows the real
-# control flow instead of pretending it is still one request.
+# Generation is two passes: a plan — a few phrases and a form — then the few
+# parts the model decorates, phrase by phrase. The fake answers whichever schema
+# the call asked for, so the stub follows the real control flow.
 FAKE_PLAN = {
     "title": "Sunrise Run", "tempoText": "Allegro", "tempoBpm": 120, "beatUnit": "1/4",
-    "timeSignature": "4/4", "concertKey": "G major", "measureCount": 2,
+    "timeSignature": "4/4", "concertKey": "G major",
     "programNote": "A bright opener.", "rehearsalTips": "Watch the pickup.",
-    "theme": "G2 A2 B2 c2 | d8 |",
-    "sections": [{"name": "A", "fromMeasure": 1, "toMeasure": 2,
-                  "description": "Statement."}],
-    "harmony": [{"measure": 1, "chord": "G"}, {"measure": 2, "chord": "D"}],
-    "partPlan": [{"partId": f"P{i}", "role": "melody" if i == 1 else "harmony"}
-                 for i in range(1, 6)],
+    "phrases": [
+        {"id": "A", "chords": ["G", "D"],
+         "soprano": "B2 c2 d4 | A8 |", "alto": "G4 G4 | F8 |",
+         "tenor": "D4 D4 | D8 |", "bass": "G,4 G,4 | D,8 |"},
+        {"id": "B", "chords": ["Em", "G"],
+         "soprano": "e4 g4 | B8 |", "alto": "B4 B4 | G8 |",
+         "tenor": "G,4 E4 | D8 |", "bass": "E,4 E,4 | G,8 |"},
+    ],
+    "form": [
+        {"label": "A", "phrase": "A", "fromBar": None, "toBar": None, "transpose": 0,
+         "dynamic": "mf", "shape": "steady", "texture": "tutti", "lead": "P1",
+         "description": "Statement."},
+        {"label": "B", "phrase": "B", "fromBar": None, "toBar": None, "transpose": 5,
+         "dynamic": "p", "shape": "crescendo", "texture": "solo", "lead": "P4",
+         "description": "Oboe solo, a fourth up."},
+        {"label": "A2", "phrase": "A", "fromBar": None, "toBar": None, "transpose": 0,
+         "dynamic": "ff", "shape": "steady", "texture": "tutti", "lead": "P2",
+         "description": "Return, tune in Violin II."},
+        {"label": "Coda", "phrase": "A", "fromBar": 2, "toBar": 2, "transpose": 0,
+         "dynamic": "pp", "shape": "steady", "texture": "reduced", "lead": None,
+         "description": "Last bar, quietly."},
+    ],
+    "partPlan": [
+        {"partId": "P1", "voice": "soprano", "treatment": "decorated", "role": "melody"},
+        {"partId": "P2", "voice": "alto", "treatment": "plain", "role": "harmony"},
+        {"partId": "P3", "voice": "tenor", "treatment": "plain", "role": "inner"},
+        {"partId": "P4", "voice": "soprano", "treatment": "plain", "role": "solo"},
+        {"partId": "P5", "voice": "tenor", "treatment": "sustained", "role": "support"},
+    ],
     "conductor": {"overview": "Keep it buoyant.", "gestures": "Light 4.",
                   "tempoMap": [{"measure": 1, "marking": "Allegro", "bpm": 120}],
-                  "cues": [{"measure": 1, "part": "Oboe", "text": "Breathe together."}],
+                  "cues": [{"measure": 3, "part": "Oboe", "text": "Solo."},
+                           {"measure": 40, "part": "Oboe", "text": "Past the end."}],
                   "rehearsalMarks": [{"measure": 1, "label": "A", "note": "Balance."}]},
 }
+FAKE_MEASURES = 2 + 2 + 2 + 1
 
+# The decorated line: Violin I, written once per phrase.
 FAKE_MODEL_OUTPUT = {
+    "parts": [
+        {"partId": "P1", "performanceNote": "Lead.",
+         "phrases": [{"phrase": "A", "abc": "(B c) !mf!d2 .d4 | A6 G2 |", "abcLower": None},
+                     {"phrase": "B", "abc": "e2 g2 b4 | B8 |", "abcLower": None}]},
+    ],
+}
+
+# Whole parts in the shape validate_notation() reads, for the checks below
+# that exercise it directly.
+FULL_PARTS = {
+    "timeSignature": "4/4",
     "parts": [
         {"partId": "P1", "abcKey": "G", "abc": "G2 A2 B2 c2 | d8 |",
          "abcLower": None, "performanceNote": "Lead."},
@@ -355,6 +392,46 @@ check("  the plan is asked for before the parts",
       == ["plan", "parts"],
       [c.kwargs["response_format"]["json_schema"]["name"] for c in create.call_args_list])
 
+# The form, not the model, decides the length: four sections from two phrases.
+import abc_check as abc_check_mod
+written_parts = {w["partId"]: w for w in score.get("written", [])}
+check("  the piece is as long as its form", score.get("measureCount") == FAKE_MEASURES,
+      score.get("measureCount"))
+check("  every part, derived or written, has exactly that many bars",
+      all(abc_check_mod.bar_count(w["abc"]) == FAKE_MEASURES for w in written_parts.values()),
+      {k: abc_check_mod.bar_count(w["abc"]) for k, w in written_parts.items()})
+parts_prompt = create.call_args_list[1].kwargs["messages"][-1]["content"]
+check("  the model is asked for phrases, not the whole piece",
+      "A = 2 bars, B = 2 bars" in parts_prompt and "WRITE THESE 1 PART" in parts_prompt,
+      parts_prompt[-1500:])
+check("  only the decorated part reaches the model; the rest are derived",
+      "[P1] Violin I" in parts_prompt.split("WRITE THESE")[1]
+      and "[P2]" not in parts_prompt.split("WRITE THESE")[1], parts_prompt[-1500:])
+check("  the decorated phrase is reused, articulation kept, its own dynamic replaced",
+      written_parts["P1"]["abc"].count("(B c) d2 .d4") == 2
+      and written_parts["P1"]["abc"].startswith("!mf! (B c) d2"),
+      written_parts["P1"]["abc"])
+check("  a transposed section changes key and returns home",
+      "[K:C]" in written_parts["P2"]["abc"] and "[K:G]" in written_parts["P2"]["abc"],
+      written_parts["P2"]["abc"])
+check("  the section's dynamic is marked in derived parts too",
+      "!ff!" in written_parts["P3"]["abc"] and "!pp!" in written_parts["P3"]["abc"],
+      written_parts["P3"]["abc"])
+check("  a solo thins the ensemble: the doubling players rest under it",
+      written_parts["P3"]["abc"].split("||")[1].strip().startswith("[K:C] z8"),
+      written_parts["P3"]["abc"])
+check("  the soloist carries the tune in the solo section",
+      "z8" not in written_parts["P4"]["abc"].split("||")[1], written_parts["P4"]["abc"])
+check("  the piano's left hand reads the bass line, not a copy of the right",
+      written_parts["P5"]["abcLower"] and
+      written_parts["P5"]["abcLower"] != written_parts["P5"]["abc"],
+      written_parts["P5"])
+check("  the form's sections come back for the playback timeline",
+      [s["name"] for s in score.get("sections", [])] == ["A", "B", "A2", "Coda"]
+      and score["sections"][-1]["toMeasure"] == FAKE_MEASURES, score.get("sections"))
+check("  conductor cues past the end of the piece are dropped",
+      [c["measure"] for c in score["conductor"]["cues"]] == [3], score["conductor"]["cues"])
+
 # Progress: a six-minute request has to be able to say what it is doing.
 import progress as progress_mod
 
@@ -417,20 +494,20 @@ check("  and the brief tells the model to hold one tempo",
 
 # A bar that doesn't add up is the model's most common failure. It must be
 # caught here rather than by a player at a music stand.
-overfull = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
+overfull = json.loads(json.dumps(FULL_PARTS))
 overfull["parts"][1]["abc"] = "D2 D2 G2 G2 A2 | B8 |"          # 10 units in a 4/4 bar
 found = composer.validate_notation(overfull, ROSTER, "intermediate")
 check("an overfull bar is detected",
       any("bar 1 is 10 units long, needs 8" in f for f in found), found)
 
-short = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
+short = json.loads(json.dumps(FULL_PARTS))
 short["parts"][1]["abc"] = "D2 D2 G2 G2 |"                     # one bar, not two
 check("a part with the wrong number of bars is detected",
       any("has 1 bars; every part must have exactly 2" in f
           for f in composer.validate_notation(short, ROSTER, "intermediate")),
       composer.validate_notation(short, ROSTER, "intermediate"))
 
-out_of_range = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
+out_of_range = json.loads(json.dumps(FULL_PARTS))
 out_of_range["parts"][3]["abc"] = "c'2 e'2 g'2 c''2 | c'8 |"    # oboe, far too high
 check("notes above the instrument's range are detected",
       any("above its highest playable note" in f
@@ -440,46 +517,118 @@ check("notes above the instrument's range are detected",
 check("the same notes are allowed when the level permits the full range",
       not any("above its highest" in f
               for f in composer.validate_notation(
-                  json.loads(json.dumps(FAKE_MODEL_OUTPUT)), ROSTER, "pro")))
+                  json.loads(json.dumps(FULL_PARTS)), ROSTER, "pro")))
 
-# Bad first draft, good repair -> the user gets a correct score and no warning.
-r, create = call_with_model(COMPOSE, FakeCompletion(short), FakeCompletion(FAKE_MODEL_OUTPUT))
-check("a defective score is written, then repaired, after one plan",
+# A hand-written phrase with a bad bar is caught before it is multiplied out
+# across the form, and only that phrase goes back for correction.
+BAD_PHRASE = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
+BAD_PHRASE["parts"][0]["phrases"][0]["abc"] = "(B c) d2 .d4 B2 | A6 G2 |"     # 10 units
+r, create = call_with_model(COMPOSE, FakeCompletion(BAD_PHRASE), FakeCompletion(FAKE_MODEL_OUTPUT))
+check("a defective phrase is written, then repaired, after one plan",
       r.status_code == 201 and create.call_count == 3, create.call_count)
-check("  the repair brief tells the model which bar is wrong",
-      "every part must have exactly 2" in create.call_args.kwargs["messages"][-1]["content"],
-      create.call_args.kwargs["messages"][-1]["content"][:200])
+repair_prompt = create.call_args.kwargs["messages"][-1]["content"]
+check("  the repair brief names the phrase and the bar",
+      "phrase A bar 1 is 10 units long, needs 8" in repair_prompt
+      and "phrase B" not in repair_prompt.split("AS THEY STAND:")[1].split("Correct")[0],
+      repair_prompt[:600])
 check("  a successful repair clears the warnings",
       r.json["score"]["warnings"] == [] and r.json["score"]["repaired"] is True,
       (r.json["score"]["warnings"], r.json["score"]["repaired"]))
+check("  and the repaired phrase is the one used",
+      "(B c) d2 .d4 | A6" in r.json["score"]["written"][0]["abc"], r.json["score"]["written"][0]["abc"])
 
-# Bad first draft, repair no better -> deliver it anyway, but say so.
-r, create = call_with_model(COMPOSE, FakeCompletion(short), FakeCompletion(short))
-check("an unsuccessful repair still delivers the score, with a warning",
-      r.status_code == 201 and r.json["score"]["warnings"]
-      and r.json["score"]["repaired"] is False,
-      (r.json["score"]["warnings"], r.json["score"]["repaired"]))
-check("  the warning is written for a musician, not a parser",
-      "won't line up" in r.json["score"]["warnings"][0], r.json["score"]["warnings"])
+# Repair no better -> that phrase falls back to the chorale line, so the parts
+# still line up and nothing has to be flagged.
+r, create = call_with_model(COMPOSE, FakeCompletion(BAD_PHRASE), FakeCompletion(BAD_PHRASE))
+lead = r.json["score"]["written"][0]["abc"] if r.status_code == 201 else ""
+check("an unrepairable phrase falls back to its chorale line",
+      r.status_code == 201 and r.json["score"]["repaired"] is False
+      and ".d4 B2" not in lead and abc_check_mod.bar_count(lead) == FAKE_MEASURES,
+      (r.status_code, lead))
+check("  and the score still lines up, so there is no alignment warning",
+      not any("won't line up" in w for w in r.json["score"]["warnings"]),
+      r.json["score"]["warnings"])
 
-# A batch that is cut off is retried once. If every batch fails there is no
-# score to deliver, and the reason has to survive into the message — "it was cut
-# off, try a shorter piece" is actionable where "it didn't work" is not.
+# A batch that is cut off is retried once. If it still fails, the part plays
+# its plain chorale line — the piece is delivered, and the user is told.
 cut = lambda: FakeCompletion(FAKE_MODEL_OUTPUT, finish_reason="length")
 r, create = call_with_model(COMPOSE, cut(), cut())
 check("a cut-off batch is retried before giving up", create.call_count == 3,
       create.call_count)
-check("  and total failure -> 502 naming the cause",
-      r.status_code == 502 and "cut off" in r.json["message"], (r.status_code, r.json))
-
-# One bad batch out of several must not cost the whole piece.
-HALF = {"parts": [p for p in FAKE_MODEL_OUTPUT["parts"] if p["partId"] in ("P1", "P2")]}
-r, _ = call_with_model(COMPOSE, FakeCompletion(HALF), FakeCompletion({"parts": []}),
-                       FakeCompletion({"parts": []}))
-check("a partly-written score is still delivered", r.status_code == 201, r.status_code)
-check("  with the missing players named",
-      any("missing from the score" in w for w in r.json["score"]["warnings"]),
+check("  and the score is still delivered, every part present",
+      r.status_code == 201 and len(r.json["score"]["parts"]) == 5, (r.status_code, r.json))
+check("  with the plain-line parts named",
+      any("Violin I" in w and "plain harmony line" in w for w in r.json["score"]["warnings"]),
       r.json["score"]["warnings"])
+
+# A plan with no usable phrase has no music to build from.
+r, _ = call_with_model(COMPOSE, plan={**FAKE_PLAN, "phrases": []})
+check("a plan with no music -> 502, not an empty score",
+      r.status_code == 502 and "usable music" in r.json["message"], (r.status_code, r.json))
+
+# Beginners never change key mid-piece, whatever the plan asks for.
+r, _ = call_with_model({**COMPOSE, "level": "beginner"}, FakeCompletion(FAKE_MODEL_OUTPUT),
+                       FakeCompletion(FAKE_MODEL_OUTPUT))
+check("a beginner piece stays in one key",
+      r.status_code == 201 and not any("[K:" in w["abc"] for w in r.json["score"]["written"]),
+      (r.status_code, r.json.get("message"), r.json.get("errors")))
+
+# Harmony is enforced, not hoped for. The chorale's lower voices are moved onto
+# the chord on every beat, and a hand-written line that holds a note against
+# the chord is never used.
+import form as form_mod
+from fractions import Fraction as Fr
+voices = {"soprano": [[(71, Fr(8))]], "alto": [[(65, Fr(4)), (64, Fr(4))]],
+          "tenor": [[(62, Fr(8))]], "bass": [[(43, Fr(8))]]}
+moved = form_mod.harmonise(voices, ["G"], Fr(2))
+check("a chorale note off the chord on a beat is moved onto it",
+      moved == 2 and voices["alto"][0][0][0] % 12 in (7, 11, 2)
+      and voices["alto"][0][1][0] % 12 in (7, 11, 2), voices["alto"])
+check("  and the bass and the tune, already on the chord, are left alone",
+      voices["bass"][0] == [(43, Fr(8))] and voices["soprano"][0] == [(71, Fr(8))])
+
+HELD = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
+HELD["parts"][0]["phrases"][0]["abc"] = "(B c) d2 .d4 | c8 |"     # C held over D
+r, create = call_with_model(COMPOSE, FakeCompletion(HELD), FakeCompletion(HELD))
+check("a line holding a note against the chord goes back for correction",
+      create.call_count == 3 and "held against the chord" in
+      create.call_args.kwargs["messages"][-1]["content"], create.call_count)
+check("  and if it is not fixed, the chorale line is played instead",
+      r.status_code == 201 and "c8" not in r.json["score"]["written"][0]["abc"],
+      r.json.get("score", {}).get("written", [{}])[0].get("abc"))
+
+# The outline names the chords; each phrase's chorale is its own call. If one
+# fails, the piece still arrives, with that phrase voiced from its chords.
+OUTLINE = json.loads(json.dumps(FAKE_PLAN))
+for phrase in OUTLINE["phrases"]:
+    for voice in ("soprano", "alto", "tenor", "bass"):
+        phrase.pop(voice)
+    phrase["character"] = "A rising tune."
+chorale_names = []
+
+def outline_answer(**kwargs):
+    name = kwargs["response_format"]["json_schema"]["name"]
+    chorale_names.append(name)
+    if name == "plan":
+        return FakeCompletion(OUTLINE)
+    if name == "chorale":
+        if "WRITE PHRASE B" in kwargs["messages"][-1]["content"]:
+            raise composer.OpenAIError("Request timed out.")
+        return FakeCompletion({k: FAKE_PLAN["phrases"][0][k]
+                               for k in ("soprano", "alto", "tenor", "bass")})
+    return FakeCompletion(FAKE_MODEL_OUTPUT)
+
+fake = mock.Mock()
+fake.chat.completions.create.side_effect = outline_answer
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
+     mock.patch.object(composer, "client", return_value=fake):
+    r = client.post("/api/compose", json=COMPOSE, headers=AUTHED)
+check("each phrase's chorale is written in its own call",
+      chorale_names.count("chorale") == 2 and chorale_names[0] == "plan", chorale_names)
+check("  a failed chorale still delivers the whole piece, every part, every bar",
+      r.status_code == 201 and len(r.json["score"]["parts"]) == 5
+      and all(abc_check_mod.bar_count(w["abc"]) == FAKE_MEASURES
+              for w in r.json["score"]["written"]), (r.status_code, r.json.get("message")))
 
 # Missing key is a setup mistake; say so instead of returning a generic 500.
 composer._client = None

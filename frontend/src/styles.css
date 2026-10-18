@@ -2162,3 +2162,85 @@ body:has(.score-shell) {
 
   .sheet > div { break-inside: avoid; }
 }
+
+/* --- Form timeline: where in the piece the playback is ------------------- */
+.form-timeline {
+  max-width: 1400px;
+  margin: 0 auto 14px;
+  padding: 13px 18px 14px;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(18px);
+}
+.form-timeline__now {
+  margin: 0 0 10px;
+  font-size: 0.92rem;
+  color: var(--text-dim);
+  min-height: 1.4em;
+}
+.form-timeline__now strong { color: var(--text); }
+.form-timeline__badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+.form-timeline__bar { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.form-timeline__strip { display: flex; gap: 4px; }
+.form-timeline__block {
+  position: relative;
+  flex-basis: 0;
+  min-width: 34px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+.form-timeline__block:hover:not(:disabled) { border-color: var(--accent-2); }
+.form-timeline__block.is-now {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.form-timeline__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent-soft);
+  transition: width 0.2s linear;
+  pointer-events: none;
+}
+.form-timeline__label {
+  position: relative;
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.form-timeline__range {
+  position: relative;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .form-timeline__strip { flex-wrap: wrap; }
+  .form-timeline__range { display: none; }
+}
+@media print { .form-timeline { display: none; } }

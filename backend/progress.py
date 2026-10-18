@@ -42,7 +42,7 @@ STAGE_SECONDS = {"planning": 95, "writing": 130, "checking": 5,
                  "fixing": 95, "engraving": 2}
 
 STAGE_LABELS = {
-    "planning": "Planning the piece — key, form and the harmony bar by bar",
+    "planning": "Planning the piece — its themes, harmony and form",
     "writing": "Writing the parts",
     "checking": "Adding up every bar",
     "fixing": "Correcting what doesn't fit",
@@ -146,12 +146,18 @@ def read(request_id: str) -> dict | None:
     # guess made before it started: if planning took twice as long as expected,
     # so will everything else, and the number on screen should say so.
     if solid > 0.15 and elapsed > 20:
+        # Enough has finished to project from how fast this run is going.
         remaining = (elapsed / solid) - elapsed
-    else:
+    elif elapsed < entry["typicalSeconds"] * 0.8:
         remaining = entry["typicalSeconds"] - elapsed
+    else:
+        # Nothing has completed and we are already near the estimate. We do not
+        # know how much longer this will take, and a floor of "10s left" held
+        # for six minutes is exactly the lie this panel exists to stop telling.
+        remaining = None
 
-    entry["remainingSeconds"] = int(max(remaining, 10))
-    entry["overrunning"] = elapsed > entry["highSeconds"]
+    entry["remainingSeconds"] = int(remaining) if remaining and remaining > 15 else None
+    entry["overrunning"] = (remaining is None) or elapsed > entry["highSeconds"]
     return entry
 
 
