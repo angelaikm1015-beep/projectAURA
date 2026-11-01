@@ -129,9 +129,11 @@ ENSEMBLE_GROUPS = [
     {
         "value": "college",
         "label": "College / University",
-        "guidance": "Rehearses efficiently and reads well. Expect counterpoint, meter "
-                    "changes and extended technique — writing down to this group "
-                    "wastes it.",
+        "guidance": "Music majors. Their juries already demand three-octave scales and "
+                    "arpeggios in every key, double stops in thirds, sixths and "
+                    "octaves, a virtuoso étude and a concerto movement; their pianists "
+                    "audition with Chopin and Liszt études at full tempo. Write at that "
+                    "standard — a piece they could sight-read in one pass is too easy.",
     },
     {
         "value": "community",
@@ -148,9 +150,10 @@ ENSEMBLE_GROUPS = [
     {
         "value": "professional",
         "label": "Professional ensemble",
-        "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically, "
-                    "without hand-holding, and give every section something worth "
-                    "playing.",
+        "guidance": "Orchestral and chamber professionals: one rehearsal, sight-read "
+                    "to a high standard. Write idiomatically and at full virtuoso "
+                    "difficulty, without hand-holding, and give every section "
+                    "something worth practising.",
     },
 ]
 
@@ -187,27 +190,30 @@ SKILL_LEVELS = [
         "value": "higher-intermediate",
         "label": "Higher intermediate",
         "years": "4 – 7 years",
-        "guidance": "An advanced player — a strong senior in a good high school "
-                    "programme, not a careful learner. Any key, up to six accidentals, "
-                    "modal and chromatic writing, and modulation to distant keys. "
-                    "Mixed and changing meter, cross-rhythm, triplets against duple, "
-                    "and fast sixteenth-note passagework that has to be practised. "
-                    "The full written range including the top of it. Real four-part "
-                    "counterpoint with genuinely independent lines, not melody over "
-                    "accompaniment. Extended solo lines, double stops and divisi for "
-                    "strings, and chromatic harmony — secondary dominants, borrowed "
-                    "chords, diminished passing chords. Everything articulated and "
-                    "dynamically shaped throughout.",
+        "guidance": "Conservatory-audition standard — Henle difficulty 5-6, the level "
+                    "of a Brahms violin sonata or a Kreutzer étude. Any key, chromatic "
+                    "harmony and modulation. Fast sixteenth-note passagework that has "
+                    "to be practised, dotted and syncopated rhythm, triplets against "
+                    "duple, hemiola. The full written range including the top of it. "
+                    "Independent lines rather than doubling. Strings: up to seventh "
+                    "position, double stops, spiccato and fast string crossings. "
+                    "Winds and brass: the whole range, fast tonguing, wide slurred "
+                    "intervals. Piano: both hands busy — broken chords and scale runs "
+                    "in sixteenths, octaves. Everything articulated and shaped.",
     },
     {
         "value": "pro",
         "label": "Pro",
         "years": "8+ years",
-        "guidance": "No restrictions, and no caution. Chromaticism and modulation as "
-                    "the music wants them, mixed meter, rubato, virtuosic runs, "
-                    "extremes of range and dynamic, and genuinely independent voices "
-                    "throughout. Write as you would for paid players who will read it "
-                    "once and perform it.",
+        "guidance": "Virtuoso standard — Henle difficulty 7-8: a Paganini caprice, the "
+                    "Beethoven violin concerto, a Chopin or Liszt concert étude. No "
+                    "caution. Chromatic and extended harmony, real modulation, rubato. "
+                    "Rapid sixteenth- and thirty-second-note runs, arpeggios across "
+                    "the whole instrument, wide leaps, the extremes of range and "
+                    "dynamic, cross-rhythm. Strings: high positions, double stops in "
+                    "thirds, sixths and octaves, chords, ricochet and harmonics. Winds: "
+                    "double tonguing, altissimo, rapid chromatic runs. Write as for "
+                    "paid players who will read it once and perform it.",
     },
 ]
 
@@ -402,3 +408,56 @@ SCORE_INSTRUMENT_VALUES = set(INSTRUMENT_SPECS)
 ENSEMBLE_GROUPS_BY_VALUE = {item["value"]: item for item in ENSEMBLE_GROUPS}
 LEVELS_BY_VALUE = {item["value"]: item for item in SKILL_LEVELS}
 MOODS_BY_VALUE = {item["value"]: item for item in MOODS}
+
+
+# What each family is actually asked to do, by level. The general level text
+# above sets the standard; these name the techniques, because "make it harder"
+# alone produces a faster version of the same easy line. Drawn from what
+# conservatory juries and auditions require of each instrument.
+FAMILY_OF = {name: group["group"] for group in SCORE_INSTRUMENTS for name in group["options"]}
+
+TECHNIQUE = {
+    "Strings": {
+        "beginner": "First position only, separate bows and simple slurs of two notes.",
+        "intermediate": "Up to third position; simple double stops on an open string; "
+                        "slurs of up to four notes; spiccato at moderate tempo.",
+        "higher-intermediate": "Up to seventh position with shifts in the line; double "
+                               "stops in thirds and sixths; fast string crossings; "
+                               "spiccato and sautillé sixteenths; slurred runs of "
+                               "eight notes.",
+        "pro": "The whole fingerboard up to the top of the E string; double stops in "
+               "thirds, sixths and octaves; three- and four-note chords at cadences; "
+               "rapid scale and arpeggio runs in sixteenths and thirty-seconds across "
+               "all four strings; ricochet, natural harmonics; expressive high "
+               "cantabile on the G string.",
+    },
+    "Woodwinds": {
+        "beginner": "The first octave learnt; slurs and tonguing on quarters and eighths.",
+        "intermediate": "Crossing the break freely; sixteenth-note runs at moderate tempo.",
+        "higher-intermediate": "The full range; fast single tonguing; slurred leaps of "
+                               "an octave or more; chromatic runs.",
+        "pro": "The full range including the top register; double and triple tonguing; "
+               "rapid chromatic and arpeggiated runs; wide slurred leaps; trills.",
+    },
+    "Brass": {
+        "beginner": "The middle register; short phrases with room to breathe.",
+        "intermediate": "Lip slurs within the harmonic series; sixteenths at moderate tempo.",
+        "higher-intermediate": "The upper register at climaxes; fast tonguing; wide "
+                               "lip slurs; fanfare figures.",
+        "pro": "The full range including the top; double tonguing; flexible lip slurs "
+               "across wide intervals; sustained high lyrical playing.",
+    },
+    "Percussion": {
+        "beginner": "Steady quarters and eighths.",
+        "intermediate": "Sixteenths, accents and simple rolls.",
+        "higher-intermediate": "Syncopated patterns, rolls with dynamics, fills.",
+        "pro": "Complex syncopation, rudiments, dynamic rolls and fills, "
+               "four-mallet chords on mallet instruments.",
+    },
+    "Voice": {
+        "beginner": "A narrow, comfortable range; stepwise lines.",
+        "intermediate": "An octave and a fourth; simple melismas.",
+        "higher-intermediate": "The full range; melismas and wider leaps.",
+        "pro": "The full range; coloratura runs, sustained high notes, wide leaps.",
+    },
+}

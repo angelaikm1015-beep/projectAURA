@@ -306,12 +306,14 @@ FAKE_PLAN = {
 }
 FAKE_MEASURES = 2 + 2 + 2 + 1
 
-# The decorated line: Violin I, written once per phrase.
+# The decorated line: Violin I, written fresh for every section of the form.
 FAKE_MODEL_OUTPUT = {
     "parts": [
         {"partId": "P1", "performanceNote": "Lead.",
-         "phrases": [{"phrase": "A", "abc": "(B c) !mf!d2 .d4 | A6 G2 |", "abcLower": None},
-                     {"phrase": "B", "abc": "e2 g2 b4 | B8 |", "abcLower": None}]},
+         "sections": [{"section": "s1", "abc": "(B c) !mf!d2 .d4 | A6 G2 |", "abcLower": None},
+                      {"section": "s2", "abc": "a2 c'2 e'4 | e'8 |", "abcLower": None},
+                      {"section": "s3", "abc": "!accent!G2 B2 d4 | A6 F2 |", "abcLower": None},
+                      {"section": "s4", "abc": "F8 |", "abcLower": None}]},
     ],
 }
 
@@ -401,16 +403,17 @@ check("  every part, derived or written, has exactly that many bars",
       all(abc_check_mod.bar_count(w["abc"]) == FAKE_MEASURES for w in written_parts.values()),
       {k: abc_check_mod.bar_count(w["abc"]) for k, w in written_parts.items()})
 parts_prompt = create.call_args_list[1].kwargs["messages"][-1]["content"]
-check("  the model is asked for phrases, not the whole piece",
-      "A = 2 bars, B = 2 bars" in parts_prompt and "WRITE THESE 1 PART" in parts_prompt,
-      parts_prompt[-1500:])
-check("  only the decorated part reaches the model; the rest are derived",
-      "[P1] Violin I" in parts_prompt.split("WRITE THESE")[1]
-      and "[P2]" not in parts_prompt.split("WRITE THESE")[1], parts_prompt[-1500:])
-check("  the decorated phrase is reused, articulation kept, its own dynamic replaced",
-      written_parts["P1"]["abc"].count("(B c) d2 .d4") == 2
-      and written_parts["P1"]["abc"].startswith("!mf! (B c) d2"),
-      written_parts["P1"]["abc"])
+check("  the model writes each section of its line, not the whole score",
+      "SECTION s1" in parts_prompt and "SECTION s4" in parts_prompt
+      and "YOU ARE WRITING [P1] Violin I" in parts_prompt, parts_prompt[-1500:])
+check("  only the melody part reaches the model; the rest are built from the harmony",
+      [c.kwargs["response_format"]["json_schema"]["name"]
+       for c in create.call_args_list].count("parts") == 1, create.call_count)
+check("  each section is its own line, with its own expression kept",
+      "(B c) !mf!d2 .d4" in written_parts["P1"]["abc"]
+      and "!accent!G2 B2 d4" in written_parts["P1"]["abc"], written_parts["P1"]["abc"])
+check("  a returning theme is varied, not copied",
+      written_parts["P1"]["abc"].count("(B c) !mf!d2 .d4") == 1, written_parts["P1"]["abc"])
 check("  a transposed section changes key and returns home",
       "[K:C]" in written_parts["P2"]["abc"] and "[K:G]" in written_parts["P2"]["abc"],
       written_parts["P2"]["abc"])
@@ -519,31 +522,38 @@ check("the same notes are allowed when the level permits the full range",
               for f in composer.validate_notation(
                   json.loads(json.dumps(FULL_PARTS)), ROSTER, "pro")))
 
-# A hand-written phrase with a bad bar is caught before it is multiplied out
-# across the form, and only that phrase goes back for correction.
+# A bar a beat too long is corrected in place by Python — no slow call needed.
 BAD_PHRASE = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
-BAD_PHRASE["parts"][0]["phrases"][0]["abc"] = "(B c) d2 .d4 B2 | A6 G2 |"     # 10 units
-r, create = call_with_model(COMPOSE, FakeCompletion(BAD_PHRASE), FakeCompletion(FAKE_MODEL_OUTPUT))
-check("a defective phrase is written, then repaired, after one plan",
-      r.status_code == 201 and create.call_count == 3, create.call_count)
-repair_prompt = create.call_args.kwargs["messages"][-1]["content"]
-check("  the repair brief names the phrase and the bar",
-      "phrase A bar 1 is 10 units long, needs 8" in repair_prompt
-      and "phrase B" not in repair_prompt.split("AS THEY STAND:")[1].split("Correct")[0],
-      repair_prompt[:600])
-check("  a successful repair clears the warnings",
-      r.json["score"]["warnings"] == [] and r.json["score"]["repaired"] is True,
-      (r.json["score"]["warnings"], r.json["score"]["repaired"]))
-check("  and the repaired phrase is the one used",
-      "(B c) d2 .d4 | A6" in r.json["score"]["written"][0]["abc"], r.json["score"]["written"][0]["abc"])
+BAD_PHRASE["parts"][0]["sections"][0]["abc"] = "(B c) d2 .d4 B2 | A6 G2 |"     # 10 units
+r, create = call_with_model(COMPOSE, FakeCompletion(BAD_PHRASE))
+check("a bar that doesn't add up is fixed in place, with no correction call",
+      r.status_code == 201 and create.call_count == 2
+      and "(B c) d2 .d4 | A6" in r.json["score"]["written"][0]["abc"]
+      and r.json["score"]["warnings"] == [],
+      (create.call_count, r.json.get("score", {}).get("written", [{}])[0].get("abc")))
 
-# Repair no better -> that phrase falls back to the chorale line, so the parts
-# still line up and nothing has to be flagged.
-r, create = call_with_model(COMPOSE, FakeCompletion(BAD_PHRASE), FakeCompletion(BAD_PHRASE))
+# A line that sits off the chord on most of its beats is a musical problem,
+# not arithmetic: that goes back to the model, and only that section.
+CLASHING = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
+CLASHING["parts"][0]["sections"][0]["abc"] = "f f e e f f e e | A6 G2 |"
+r, create = call_with_model(COMPOSE, FakeCompletion(CLASHING), FakeCompletion(FAKE_MODEL_OUTPUT))
+repair_prompt = create.call_args.kwargs["messages"][-1]["content"]
+check("a line off the chord on most beats goes back for correction",
+      r.status_code == 201 and create.call_count == 3
+      and "section s1 clashes with the harmony" in repair_prompt
+      and "section s2" not in repair_prompt, (create.call_count, repair_prompt[:400]))
+check("  a successful repair clears the warnings and is the one used",
+      r.json["score"]["warnings"] == [] and r.json["score"]["repaired"] is True
+      and "(B c) !mf!d2 .d4" in r.json["score"]["written"][0]["abc"],
+      (r.json["score"]["warnings"], r.json["score"]["repaired"]))
+
+# Repair no better -> that section falls back to the chorale line, so the
+# parts still line up and nothing clashes.
+r, create = call_with_model(COMPOSE, FakeCompletion(CLASHING), FakeCompletion(CLASHING))
 lead = r.json["score"]["written"][0]["abc"] if r.status_code == 201 else ""
-check("an unrepairable phrase falls back to its chorale line",
+check("an unrepairable section falls back to its chorale line",
       r.status_code == 201 and r.json["score"]["repaired"] is False
-      and ".d4 B2" not in lead and abc_check_mod.bar_count(lead) == FAKE_MEASURES,
+      and "f f e e" not in lead and abc_check_mod.bar_count(lead) == FAKE_MEASURES,
       (r.status_code, lead))
 check("  and the score still lines up, so there is no alignment warning",
       not any("won't line up" in w for w in r.json["score"]["warnings"]),
@@ -588,14 +598,13 @@ check("  and the bass and the tune, already on the chord, are left alone",
       voices["bass"][0] == [(43, Fr(8))] and voices["soprano"][0] == [(71, Fr(8))])
 
 HELD = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
-HELD["parts"][0]["phrases"][0]["abc"] = "(B c) d2 .d4 | c8 |"     # C held over D
-r, create = call_with_model(COMPOSE, FakeCompletion(HELD), FakeCompletion(HELD))
-check("a line holding a note against the chord goes back for correction",
-      create.call_count == 3 and "held against the chord" in
-      create.call_args.kwargs["messages"][-1]["content"], create.call_count)
-check("  and if it is not fixed, the chorale line is played instead",
-      r.status_code == 201 and "c8" not in r.json["score"]["written"][0]["abc"],
-      r.json.get("score", {}).get("written", [{}])[0].get("abc"))
+HELD["parts"][0]["sections"][0]["abc"] = "(B c) d2 .d4 | c8 |"     # C held over D
+r, create = call_with_model(COMPOSE, FakeCompletion(HELD))
+lead = r.json["score"]["written"][0]["abc"] if r.status_code == 201 else ""
+check("a note held against the chord is moved onto it in place, with no extra call",
+      create.call_count == 2 and "c8" not in lead and "d8" in lead, (create.call_count, lead))
+check("  and the rest of the line, articulation included, is kept",
+      "(B c) d2 .d4 | d8" in lead, lead)
 
 # The outline names the chords; each phrase's chorale is its own call. If one
 # fails, the piece still arrives, with that phrase voiced from its chords.

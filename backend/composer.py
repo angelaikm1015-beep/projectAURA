@@ -75,7 +75,8 @@ PLAN_TOKENS = 20000           # the plan is prose and a chord grid: small reply,
 BATCH_BUDGET = 5000           # visible notation expected from one batch
 REASONING_HEADROOM = 14000    # thinking, which shares the same allowance
 MAX_PARTS_PER_BATCH = 1      # one part per call: the model writes slowly, so
-MAX_CONCURRENT_BATCHES = 6   # many short replies at once beat one long one
+MAX_CONCURRENT_BATCHES = 8   # many short replies at once beat one long one
+CHUNK_BARS = 32              # bars of one player's sections per call
 
 # Wall-clock budget for one generation. A piece must be finished inside five
 # minutes, so every call gets a timeout from what is left, and the optional
@@ -586,18 +587,17 @@ PLAN_SCHEMA = _obj({
 
 # One batch of model-written parts: each one a line per phrase, not per bar of
 # the whole piece.
-WRITTEN_PHRASE_SCHEMA = _obj({
-    "phrase": {"type": "string", "description": "The phrase id."},
-    "abc": {"type": "string", "description": "This part's line for that phrase. "
-                                             "Exactly the phrase's bar count."},
-    "abcLower": {"type": ["string", "null"],
-                 "description": "Left hand for grand-staff instruments, otherwise null."},
+WRITTEN_SECTION_SCHEMA = _obj({
+    "section": {"type": "string", "description": "The section id: 's1', 's2' …"},
+    "abc": {"type": "string", "description": "This part's line for that section. "
+                                             "Exactly the section's bar count."},
+    "abcLower": {"type": ["string", "null"], "description": "Always null."},
 })
 
 WRITTEN_PART_SCHEMA = _obj({
     "partId": {"type": "string", "description": "Exactly the id given in the brief."},
-    "phrases": {"type": "array", "items": WRITTEN_PHRASE_SCHEMA,
-                "description": "One entry per phrase, every phrase."},
+    "sections": {"type": "array", "items": WRITTEN_SECTION_SCHEMA,
+                 "description": "One entry per section asked for."},
     "performanceNote": {"type": "string", "description": "One or two sentences for this player."},
 })
 
@@ -1157,132 +1157,6 @@ TREATMENTS = {
 }
 
 
-def _form_lines(plan: dict) -> list:
-    lines = []
-    phrases = plan["_phrases"]
-    for s in plan["_sections"]:
-        what = f"phrase {s['phrase']}"
-        if s["from"] or s["to"] != phrases[s["phrase"]]["bars"]:
-            what += f" bars {s['from'] + 1}-{s['to']}"
-        if s["transpose"]:
-            what += f", moved {s['transpose']:+d} semitones (to {s['key']})"
-        lead = f", tune: [{s['lead']}]" if s["lead"] else ""
-        lines.append(f"  mm.{s['start']}-{s['end']} [{s['label']}] {what}; "
-                     f"{s['dynamic']} {s['shape']}, {s['texture']}{lead} — {s['description']}")
-    return lines
-
-
-def _batch_prompt(plan: dict, request: dict, roster: list, batch: list) -> str:
-    """Ask for a handful of parts — one line per phrase, never the whole piece."""
-    units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
-    phrases = plan["_phrases"]
-    assigned = {entry["partId"]: entry for entry in plan.get("partPlan") or []}
-
-    lines = [
-        f"THE PIECE: \"{plan['title']}\" — {plan['concertKey']}, "
-        f"{plan['timeSignature']}, {plan['tempoText']} ({plan['tempoBpm']} bpm), "
-        f"{plan['measureCount']} measures.",
-        "",
-        "THE PHRASES — the whole piece is built from these, each written once, as a",
-        "four-voice chorale in CONCERT pitch. Every instrument in the ensemble is",
-        "playing one of these four lines:",
-    ]
-    for entry in plan.get("phrases") or []:
-        pid = entry.get("id")
-        if pid not in phrases:
-            continue
-        lines.append(f"  PHRASE {pid} — {phrases[pid]['bars']} bars, chords: "
-                     + " | ".join(phrases[pid]["chords"]))
-        for voice in form.VOICES:
-            lines.append(f"    {voice:8}: {entry.get(voice, '')}")
-
-    lines += ["", "THE FORM — how the phrases are used. You do NOT write this out: it is",
-              "assembled from your phrases, with the repeats, key changes, texture and",
-              "dynamics put in for you."]
-    lines += _form_lines(plan)
-
-    lines += ["", "EVERY PART IN THE PIECE, so you know what else is sounding:"]
-    for part in roster:
-        role = (assigned.get(part["partId"]) or {}).get("role", "")
-        mine = " <- WRITE THIS ONE" if part in batch else ""
-        lines.append(f"  [{part['partId']}] {part['label']} — {role}{mine}")
-
-    lines += ["", f"WRITE THESE {len(batch)} PART(S) NOW, AND ONLY THESE:"]
-    for part in batch:
-        transposition = TRANSPOSITION_TEXT.get(
-            part["transpose"], f"sounds {part['transpose']} semitones from written")
-        detail = [f"clef {part['clef']}", transposition,
-                  _range_line(part, request["level"])]
-        if part["staves"] == 2:
-            detail.append("GRAND STAFF: right hand in \"abc\", left hand in \"abcLower\"")
-        lines.append(f"  [{part['partId']}] {part['label']} — " + "; ".join(detail))
-
-        spec = assigned.get(part["partId"]) or {}
-        leads = [f"mm.{s['start']}-{s['end']}" for s in plan["_sections"]
-                 if s["lead"] == part["partId"]]
-        if leads:
-            lines.append(f"      You carry the tune in {', '.join(leads)}: write it to be heard.")
-        if spec.get("role"):
-            lines.append(f"      its role: {spec['role']}")
-
-        if not part["pitched"]:
-            lines.append("      Rhythm staff: c = the low sound, e = the high sound, plus")
-            lines.append("      rests. Write a groove for each phrase that suits its")
-            lines.append("      character and drives without covering the tune.")
-            continue
-
-        key = form.written_key_for(part, plan["concertKey"])
-        voice = spec.get("voice") if spec.get("voice") in form.VOICES else "soprano"
-        lines.append(f"      YOUR LINE, already at your instrument's written pitch in "
-                     f"{key} — decorate THIS, do not transpose anything:")
-        for pid in phrases:
-            lines.append(f"        phrase {pid}: "
-                         + form.phrase_line(plan, phrases, part, voice, pid, units))
-        lines.append("      " + TREATMENTS.get(spec.get("treatment"), TREATMENTS["decorated"]))
-
-    level = options.LEVELS_BY_VALUE[request["level"]]
-    bar_counts = ", ".join(f"{pid} = {p['bars']} bars" for pid, p in phrases.items())
-    lines += [
-        "",
-        f"PLAYING LEVEL: {level['label']} — {level['guidance']}",
-        "",
-        "RULES",
-        "  * Write each phrase ONCE: one entry per phrase id, for every phrase.",
-        f"    Bar counts: {bar_counts}. Every bar totals {abc_check._fmt(units)} units "
-        f"at L:{UNIT_NOTE_LENGTH}. Count them.",
-        "  * No pickups, no repeat signs, no header fields, and no dynamics: the",
-        "    dynamic of every section is written in for you from the form. DO mark",
-        "    articulation — slurs, staccato, accents, tenuto — because that is",
-        "    yours and it is kept.",
-        "  * Return ONLY the parts listed immediately above. Nothing else.",
-        "",
-        "THE ONE RULE THAT MATTERS MOST",
-        "  Your line is printed above, already at your instrument's written pitch.",
-        "  Every other player is playing one of the same four lines, and most of",
-        "  them are playing it exactly as given. You are decorating yours. That",
-        "  shared line is the only thing keeping the ensemble in tune.",
-        "  * On every strong beat, be on the note your line has for that beat.",
-        "    Not near it. On it.",
-        "  * Between those, decorate: repeat it, sustain it, or pass stepwise to",
-        "    the next one. A passing note falls on a weak beat and resolves by",
-        "    step into the line note that follows it.",
-        "  * Do not change a pitch because it sounds better alone. Alone it is a",
-        "    colour; against the ensemble playing the written harmony it is a",
-        "    crunch.",
-        "",
-        "WRITING A LINE RATHER THAN FILLING A SLOT",
-        "  * Give the part its own RHYTHM — that is where your freedom is. Enter",
-        "    off the beat, sustain through a bar someone else is busy in, answer a",
-        "    phrase. Independent rhythm over shared harmony is what an orchestra",
-        "    sounds like; independent harmony is what a pile-up sounds like.",
-        "  * Breathe at the seams of the phrase — wind and brass players",
-        "    physically have to, and a string line that never lifts sounds",
-        "    mechanical.",
-        "  * Slur what sings, detach what drives.",
-    ]
-    return "\n".join(lines)
-
-
 CHORALE_RULES = [
         "EACH PHRASE IS A FOUR-VOICE CHORALE — THE MOST IMPORTANT THING YOU WILL DO.",
         "Every instrument in the ensemble will be assigned one of these four lines.",
@@ -1495,6 +1369,7 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
 
     # Expand the phrases and the form into the whole piece.
     units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
+    plan["_level"] = request["level"]
     phrases = form.read_phrases(plan, units)
     if not phrases:
         raise ComposerError("The planner didn't write any usable music this time. "
@@ -1544,25 +1419,168 @@ def _tidy_conductor(plan: dict) -> None:
                             if 1 <= int(row.get("measure") or 0) <= last]
 
 
-def _unique_bars(plan: dict) -> int:
-    return sum(p["bars"] for p in plan["_phrases"].values())
+def _form_lines(plan: dict) -> list:
+    lines = []
+    phrases = plan["_phrases"]
+    for index, s in enumerate(plan["_sections"]):
+        what = f"phrase {s['phrase']}"
+        if s["from"] or s["to"] != phrases[s["phrase"]]["bars"]:
+            what += f" bars {s['from'] + 1}-{s['to']}"
+        if s["transpose"]:
+            what += f", in {s['key']}"
+        lead = f", tune: [{s['lead']}]" if s["lead"] else ""
+        lines.append(f"  [s{index + 1}] mm.{s['start']}-{s['end']} {s['label']}: {what}; "
+                     f"{s['dynamic']} {s['shape']}, {s['texture']}{lead}")
+    return lines
 
 
-def _batch_size(unique_bars: int, phrase_count: int = 1) -> int:
-    """How many parts one reply can finish comfortably.
+# How much of the writing has to be hard, not just whether it may be. Told only
+# what is allowed, the model writes a modest line and calls it advanced; asked
+# for amounts, it writes to them. Calibrated against conservatory audition
+# repertoire: a Kreutzer étude is mostly running sixteenths, a Paganini caprice
+# more so.
+DIFFICULTY_QUOTA = {
+    "higher-intermediate": [
+        "at least half the bars of every section move in sixteenths or faster;",
+        "in every section, one run or arpeggio spanning at least an octave and a half;",
+        "the climax of each section in the upper third of the full range;",
+        "strings: double stops in at least a fifth of the bars.",
+    ],
+    "pro": [
+        "at least two thirds of the bars of every section move in sixteenths, sextuplets "
+        "or thirty-seconds;",
+        "in every section, at least two runs or arpeggios spanning two octaves or more;",
+        "the climax of each section within a third of the top of the full range, reached "
+        "by leap or run;",
+        "strings: double stops in thirds, sixths or octaves in at least a quarter of the "
+        "bars, and a three- or four-note chord at section ends;",
+        "winds and brass: rapid tongued and slurred passagework across the whole range.",
+    ],
+}
 
-    A part is roughly twenty tokens a bar once the JSON wrapper is counted, and
-    it is written per phrase, so what matters is the new material, not the
-    length of the piece. The budget is deliberately a fraction of what the
-    model will allow: no single reply should be anywhere near its ceiling.
-    """
-    per_part = max(200, unique_bars * 22 + phrase_count * 40 + 150)
-    return max(1, min(MAX_PARTS_PER_BATCH, BATCH_BUDGET // per_part))
+
+def _variation(number: int, role: str, level: str) -> str:
+    """How far this hearing of the phrase departs from the guide line."""
+    if role == "counter":
+        return ("COUNTER-MELODY: someone else has the tune. Move when it holds, hold "
+                "when it moves, favour contrary motion, never double it.")
+    if number == 1:
+        return ("FIRST HEARING: present the theme — the guide notes on the beats, with "
+                "your own rhythm, phrasing and a clear high point.")
+    if number == 2:
+        return ("SECOND HEARING: vary it — rhythmic diminution around the guide notes, "
+                "ornaments, part of it in another octave. It must not sound copied.")
+    return (f"HEARING {number}: transform it — the most elaborate figuration your level "
+            "allows around the guide notes, octave displacement, the climax at the top "
+            "of the range. A listener should hear the theme, but newly.")
+
+
+def _section_prompt(plan: dict, request: dict, roster: list, part: dict,
+                    indexes: list) -> str:
+    """Ask one player for a run of sections — a fresh line for each one."""
+    units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
+    sections = plan["_sections"]
+    numbers = form.statement_numbers(sections)
+    assigned = {entry["partId"]: entry for entry in plan.get("partPlan") or []}
+    spec = assigned.get(part["partId"]) or {}
+    voice = spec.get("voice") if spec.get("voice") in form.VOICES else "soprano"
+    level = options.LEVELS_BY_VALUE[request["level"]]
+    family = options.FAMILY_OF.get(part["instrument"], "")
+    technique = (options.TECHNIQUE.get(family) or {}).get(request["level"], "")
+    transposition = TRANSPOSITION_TEXT.get(
+        part["transpose"], f"sounds {part['transpose']} semitones from written")
+
+    lines = [
+        f"THE PIECE: \"{plan['title']}\" — {plan['concertKey']}, {plan['timeSignature']}, "
+        f"{plan['tempoText']} ({plan['tempoBpm']} bpm), {plan['measureCount']} measures.",
+        "",
+        "THE FORM (the whole piece; other players are writing the other sections):",
+        *_form_lines(plan),
+        "",
+        "THE ENSEMBLE: " + ", ".join(f"[{p['partId']}] {p['label']}" for p in roster),
+        "",
+        f"YOU ARE WRITING [{part['partId']}] {part['label']} — clef {part['clef']}; "
+        f"{transposition}; {_range_line(part, request['level'])}.",
+        f"PLAYING LEVEL: {level['label']} — {level['guidance']}",
+    ]
+    if technique:
+        lines.append(f"TECHNIQUE THIS PLAYER MUST BE GIVEN: {technique}")
+    quota = DIFFICULTY_QUOTA.get(request["level"])
+    if quota and part["pitched"]:
+        lines += ["MINIMUM DIFFICULTY — count it in what you return; falling short is a",
+                  "failed part, however musical:", *[f"  * {q}" for q in quota]]
+    lines.append("")
+
+    for index in indexes:
+        s = sections[index]
+        chorale = form.section_chorale(plan["_phrases"], s)
+        if s["lead"] == part["partId"]:
+            role, guide = "lead", "soprano"
+        else:
+            guide = form.guide_voice(s, part["partId"], voice, {part["partId"]})
+            role = "counter" if guide != voice else "own"
+        key = form.written_key_for(part, s["key"])
+        lines += [
+            f"SECTION s{index + 1} — mm.{s['start']}-{s['end']}, EXACTLY {s['bars']} bars, "
+            f"written key {key}; {s['dynamic']} {s['shape']}, {s['texture']}.",
+            "  chords (concert): " + " | ".join(chorale["chords"]),
+        ]
+        if part["pitched"]:
+            lines += [
+                f"  guide line ({'the tune' if role == 'lead' else guide + ' voice'}, "
+                f"already at your written pitch in {key}):",
+                "    " + form.section_line(plan, part, s, "soprano" if role == "lead" else guide,
+                                           units),
+                "  " + (_variation(numbers[index], role, request["level"]) if role != "own"
+                        else "YOUR OWN LINE: realise your voice idiomatically and actively — "
+                             "never plain held notes at this level."),
+            ]
+        else:
+            lines.append("  Rhythm staff: c = low sound, e = high sound. A groove for "
+                         "this section's character; vary it from section to section.")
+        lines.append("")
+
+    lines += [
+        "RULES",
+        "  * Return one entry per section listed above, with its id (s1, s2 …).",
+        f"  * Each section has EXACTLY its bar count, every bar totalling "
+        f"{abc_check._fmt(units)} units at L:{UNIT_NOTE_LENGTH} (a plain letter is 1, "
+        "C2 is 2, C/2 is a half). Count them.",
+        "  * Write in the written key given for that section. No pickups, no repeat",
+        "    signs, no header fields, no key changes — those are added for you.",
+        "  * DO write expression: hairpins !crescendo(! !crescendo)!, accents, sfz,",
+        "    slurs, staccato, tenuto — mark the climax of every phrase. A line",
+        "    without emphasis is a failed line.",
+        "",
+        "HARMONY — THE ONE RULE THAT MATTERS MOST",
+        "  Every note you hold, and every note on a beat, must be a note of that",
+        "  bar's chord. Passing and neighbour notes go between the beats and move",
+        "  by step. The guide line is a chord tone on every beat: when in doubt,",
+        "  land on it. The rest of the ensemble is playing these chords exactly.",
+    ]
+    return "\n".join(lines)
+
+
+def _work_items(plan: dict, roster: list, to_write: list) -> list:
+    """(part, [section indexes]) — each player's sections in runs of about
+    CHUNK_BARS bars, so every reply is short and they can all go at once."""
+    items = []
+    for part in to_write:
+        run, bars = [], 0
+        for index, s in enumerate(plan["_sections"]):
+            if run and bars + s["bars"] > CHUNK_BARS:
+                items.append((part, run))
+                run, bars = [], 0
+            run.append(index)
+            bars += s["bars"]
+        if run:
+            items.append((part, run))
+    return items
 
 
 def _call_for_parts(prompt: str, name: str, temperature: float, model: str,
                     deadline: float) -> list:
-    """One structured call that returns parts, phrase by phrase."""
+    """One structured call that returns parts, section by section."""
     left = _seconds_left(deadline)
     if left < MIN_CALL_SECONDS:
         raise ComposerError("There wasn't time left to write this part.", status=504)
@@ -1595,92 +1613,76 @@ def _seconds_left(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
-def _write_batch(plan: dict, request: dict, roster: list, batch: list, model: str,
-                 deadline: float) -> list:
-    """One batch of parts. Raises ComposerError so a failure is reported, not silent."""
-    returned = _call_for_parts(_batch_prompt(plan, request, roster, batch), "parts", 0.7,
-                               model, deadline)
-    wanted = {part["partId"] for part in batch}
-    return [row for row in returned if row.get("partId") in wanted and row.get("phrases")]
-
-
-def _write_batch_insisting(plan: dict, request: dict, roster: list, batch: list,
-                           model: str, deadline: float) -> tuple:
-    """A batch, asked twice if it comes back short — and never fatal.
-
-    A batch failure costs only that batch. It is retried once, and if it still
-    will not come, the parts it owed are built from the chorale instead — a
-    plainer line, but a correct one, and the rest of the score is delivered.
-    """
-    written, why = [], None
-    try:
-        written = _write_batch(plan, request, roster, batch, model, deadline)
-    except ComposerError as error:
-        why = error
-        _log.warning("A batch failed, retrying it: %s", error)
-
-    done = {row["partId"] for row in written}
-    still_missing = [part for part in batch if part["partId"] not in done]
-    if still_missing:
+def _write_item(plan: dict, request: dict, roster: list, part: dict, indexes: list,
+                model: str, deadline: float) -> tuple:
+    """One player's run of sections, asked twice if it fails. Never fatal: what
+    does not come back is played from the chorale instead."""
+    why = None
+    for _ in range(2):
         try:
-            written += _write_batch(plan, request, roster, still_missing, model, deadline)
-            why = None
+            rows = _call_for_parts(_section_prompt(plan, request, roster, part, indexes),
+                                   "parts", 0.8, model, deadline)
+            rows = [row for row in rows if row.get("partId") == part["partId"]] or \
+                [{**row, "partId": part["partId"]} for row in rows[:1]]
+            if rows:
+                return rows, None
         except ComposerError as error:
             why = error
-            _log.warning("A batch failed twice; its parts will be derived: %s", error)
-    return written, why
+            _log.warning("Sections %s of %s failed: %s", indexes, part["label"], error)
+    return [], why
 
 
 def _model_written(plan: dict, roster: list) -> list:
-    """The parts the model writes by hand. Everyone else is derived exactly.
+    """The parts the model writes by hand. Everyone else is built exactly.
 
-    Every hand-written part is another line inventing notes against a dozen
-    that are playing the harmony exactly — and another slow call. Capping it
-    here rather than asking nicely in the prompt is what makes the limit real.
-    Unpitched percussion is always written: a chorale voice has no rhythm to
-    give a snare drum.
+    In a large ensemble that is the few players carrying the tune: every
+    hand-written line is another line inventing notes against a dozen playing
+    the harmony exactly. In chamber music — three melody instruments or fewer —
+    it is all of them: a cello in a piano trio is not an orchestral doubling,
+    and a plain chorale line there is a part too easy for anyone. Keyboards are
+    never written by hand (their part is the harmony itself); unpitched
+    percussion always is (a chorale voice has no rhythm to give a snare drum).
     """
     assigned = {entry["partId"]: entry for entry in plan.get("partPlan") or []}
-    budget = max(1, min(MAX_DECORATED, len(roster) // 4))
-
-    wants = [part for part in roster if part["pitched"] and part["instrument"] != "Timpani"
-             and (assigned.get(part["partId"]) or {}).get("treatment") == "decorated"]
-    # If the plan asked for more than its share, the ones carrying the tune win.
-    leads = [s["lead"] for s in plan["_sections"] if s["lead"]]
-    soloists = [s["lead"] for s in plan["_sections"] if s["texture"] == "solo"]
-    priority = {}
-    for pid in soloists + leads:
-        priority.setdefault(pid, len(priority))
-    wants.sort(key=lambda part: priority.get(part["partId"], 99))
-    chosen = {part["partId"] for part in wants[:budget]}
+    melodic = [part for part in roster if part["pitched"] and part["staves"] == 1
+               and part["instrument"] != "Timpani"]
+    if len(melodic) <= MAX_DECORATED:
+        chosen = {part["partId"] for part in melodic}
+    else:
+        budget = max(1, min(MAX_DECORATED, len(roster) // 4))
+        wants = [part for part in melodic
+                 if (assigned.get(part["partId"]) or {}).get("treatment") == "decorated"]
+        leads = [s["lead"] for s in plan["_sections"] if s["lead"]]
+        soloists = [s["lead"] for s in plan["_sections"] if s["texture"] == "solo"]
+        priority = {}
+        for pid in soloists + leads:
+            priority.setdefault(pid, len(priority))
+        wants.sort(key=lambda part: priority.get(part["partId"], 99))
+        chosen = {part["partId"] for part in wants[:budget]}
     return [part for part in roster if part["partId"] in chosen or not part["pitched"]]
 
 
 def _write_parts(plan: dict, request: dict, roster: list, model: str, deadline: float,
                  report=None) -> tuple:
-    """Second pass: the few hand-written lines, phrase by phrase.
+    """Second pass: the hand-written lines, section by section, all at once.
 
-    Returns ({partId: {phraseId: {abc, abcLower, performanceNote}}}, failures).
-    The batches go out together; they don't need each other's output.
+    Returns ({partId: {section index: {abc, abcLower, performanceNote}}}, failures).
     """
     to_write = _model_written(plan, roster)
-    _log.info("%d of %d parts sent to the model; %d unique bars become %d measures",
-              len(to_write), len(roster), _unique_bars(plan), plan["measureCount"])
-    if not to_write:
+    items = _work_items(plan, roster, to_write)
+    _log.info("%d of %d parts written by the model, in %d calls, over %d measures",
+              len(to_write), len(roster), len(items), plan["measureCount"])
+    if not items:
         if report:
             report("writing", 1, 1)
         return {}, []
-
-    size = _batch_size(_unique_bars(plan), len(plan["_phrases"]))
-    batches = [to_write[i:i + size] for i in range(0, len(to_write), size)]
     if report:
-        report("writing", 0, len(batches))
+        report("writing", 0, len(items))
 
     rows, failures, finished = [], [], 0
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
-        futures = [pool.submit(_write_batch_insisting, plan, request, roster, batch, model,
-                               deadline)
-                   for batch in batches]
+        futures = [pool.submit(_write_item, plan, request, roster, part, indexes, model,
+                               deadline) for part, indexes in items]
         for future in as_completed(futures):
             part_of_it, why = future.result()
             rows += part_of_it
@@ -1688,48 +1690,58 @@ def _write_parts(plan: dict, request: dict, roster: list, model: str, deadline: 
                 failures.append(why)
             finished += 1
             if report:
-                report("writing", finished, len(batches))
-    return _by_phrase(rows, plan), failures
+                report("writing", finished, len(items))
+    return _by_section(rows, plan), failures
 
 
-def _by_phrase(rows: list, plan: dict) -> dict:
+def _by_section(rows: list, plan: dict) -> dict:
     out = {}
+    count = len(plan["_sections"])
     for row in rows:
         mine = out.setdefault(row["partId"], {})
-        for entry in row.get("phrases") or []:
-            pid = str(entry.get("phrase") or "").strip()
-            if pid in plan["_phrases"] and entry.get("abc"):
-                mine[pid] = {"abc": entry["abc"], "abcLower": entry.get("abcLower"),
-                             "performanceNote": row.get("performanceNote") or ""}
-    return {pid: phrases for pid, phrases in out.items() if phrases}
+        for entry in row.get("sections") or []:
+            match = re.search(r"\d+", str(entry.get("section") or ""))
+            index = int(match.group(0)) - 1 if match else -1
+            if 0 <= index < count and entry.get("abc"):
+                mine[index] = {"abc": entry["abc"], "abcLower": entry.get("abcLower"),
+                               "performanceNote": row.get("performanceNote") or ""}
+    return {pid: sections for pid, sections in out.items() if sections}
 
 
 def _check_written(plan: dict, roster: list, written: dict, level: str) -> dict:
-    """{partId: {phraseId: [defects]}} for the hand-written phrases."""
+    """{partId: {section index: [defects]}} for the hand-written sections."""
     units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
+    beat = form.beat_units(plan["timeSignature"])
     by_id = {part["partId"]: part for part in roster}
     found = {}
-    for part_id, phrases in written.items():
+    for part_id, sections in written.items():
         part = by_id[part_id]
         low, high = _range_for(part, level)
-        for phrase_id, text in phrases.items():
-            bars = plan["_phrases"][phrase_id]["bars"]
-            label = f"{part['label']} phrase {phrase_id}"
-            problems = form.check_phrase(text["abc"], bars, units, label)
-            if part["staves"] == 2 and text.get("abcLower"):
-                problems += form.check_phrase(text["abcLower"], bars, units,
-                                              f"{label} (left hand)")
+        for index, text in sections.items():
+            s = plan["_sections"][index]
+            label = f"{part['label']} section s{index + 1}"
+            # Small slips — a bar a sixteenth out, a note an octave past the
+            # range — are corrected here, exactly, rather than costing the
+            # whole section or a slow correction call.
+            text["abc"] = form.fix_line(text["abc"], s["bars"], units, part,
+                                        form.written_key_for(part, s["key"]))
+            problems = form.check_phrase(text["abc"], s["bars"], units, label)
+            if not problems:
+                # A long note off the chord is fixed here, exactly, rather than
+                # costing the section or a slow correction call.
+                text["abc"] = form.snap_held(text["abc"], part,
+                                             form.section_chorale(plan["_phrases"], s),
+                                             form.written_key_for(part, s["key"]), beat, units)
             if low and part["pitched"]:
                 problems += abc_check.check_range(text["abc"], low, high, label)
             if not problems:
                 # Only once the bars add up is it meaningful to ask what sounds
                 # on each beat.
                 problems += form.harmony_clashes(
-                    text["abc"], part, plan["_phrases"][phrase_id],
-                    form.written_key_for(part, plan["concertKey"]),
-                    form.beat_units(plan["timeSignature"]), label)
+                    text["abc"], part, form.section_chorale(plan["_phrases"], s),
+                    form.written_key_for(part, s["key"]), beat, label)
             if problems:
-                found.setdefault(part_id, {})[phrase_id] = problems
+                found.setdefault(part_id, {})[index] = problems
     return found
 
 
@@ -1737,112 +1749,101 @@ MAX_DEFECTS_SHOWN = 60
 REPAIR_SCHEMA = BATCH_SCHEMA
 
 
-def _repair_prompt(plan: dict, roster: list, written: dict, broken: dict, batch: list) -> str:
+def _repair_prompt(plan: dict, roster: list, written: dict, broken: dict, part_id: str) -> str:
     units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
     by_id = {part["partId"]: part for part in roster}
     lines = [
-        "You wrote these phrases and some bars do not add up, notes are out of",
-        "range, or the line is off the chord on its strong beats. I checked them.",
+        "You wrote these sections and some bars do not add up, notes are out of",
+        "range, or the line is off the chord on its beats. I checked them.",
         "",
         f"The time signature is {plan['timeSignature']} and the unit note length is "
         f"L:{UNIT_NOTE_LENGTH}, so EVERY bar must total exactly {abc_check._fmt(units)} "
         "units, where a plain letter is 1 unit, C2 is 2, C4 is 4, C/2 is a half.",
         "",
-        "THE PHRASES TO CORRECT, AS THEY STAND:",
+        "THE SECTIONS TO CORRECT, AS THEY STAND:",
     ]
-    for part_id in batch:
-        for phrase_id, problems in broken[part_id].items():
-            text = written[part_id][phrase_id]
-            bars = plan["_phrases"][phrase_id]["bars"]
-            lines.append(f"  [{part_id}] {by_id[part_id]['label']}, phrase {phrase_id} "
-                         f"(must be {bars} bars):")
-            lines.append(f"    {text['abc']}")
-            if text.get("abcLower"):
-                lines.append(f"    left hand: {text['abcLower']}")
-            for problem in problems[:MAX_DEFECTS_SHOWN]:
-                lines.append(f"    - {problem}")
+    for index, problems in broken[part_id].items():
+        s = plan["_sections"][index]
+        chorale = form.section_chorale(plan["_phrases"], s)
+        lines.append(f"  [{part_id}] {by_id[part_id]['label']}, section s{index + 1} "
+                     f"(must be {s['bars']} bars; chords {' | '.join(chorale['chords'])}):")
+        lines.append(f"    {written[part_id][index]['abc']}")
+        for problem in problems[:MAX_DEFECTS_SHOWN]:
+            lines.append(f"    - {problem}")
     lines += [
         "",
-        "Correct the DURATIONS, any notes out of range, and any strong beat that is",
-        "not on a note of the chorale sounding at that moment. Keep the pitches,",
-        "the articulation and the character of what you wrote — this is a correction,",
-        "not a rewrite. Where a bar is too long, shorten a note or drop a repeated",
-        "one; where it is too short, lengthen the last note of the bar. Add up every",
-        "bar before you return it.",
+        "Correct the DURATIONS, any notes out of range, and any held or on-the-beat",
+        "note that is not in that bar's chord. Keep the rest of the line, its",
+        "articulation and character — this is a correction, not a rewrite.",
         "",
-        "Return exactly these part(s), each with only the phrases listed for it.",
+        "Return exactly this part, with only the sections listed for it.",
     ]
     return "\n".join(lines)
 
 
 def _repair_phrases(plan: dict, roster: list, written: dict, broken: dict, level: str,
                     model: str, deadline: float, report=None) -> tuple:
-    """One corrective round on the broken phrases only — a few bars, not a score.
+    """One corrective round on the broken sections only — never a rewrite.
 
-    Kept to one round on purpose: it reliably clears arithmetic slips, and past
-    that the model starts recomposing rather than correcting. A phrase is
-    replaced only if the correction actually has fewer defects.
+    A section is replaced only if the correction actually has fewer defects.
     Returns (written, repaired?).
     """
     ids = [part["partId"] for part in roster if part["partId"] in broken]
-    size = MAX_PARTS_PER_BATCH
-    batches = [ids[i:i + size] for i in range(0, len(ids), size)]
     if report:
-        report("fixing", 0, len(batches))
+        report("fixing", 0, len(ids))
 
-    def one(batch):
-        # The correction round is optional: whatever goes wrong in it, the
-        # phrases it could not fix fall back to the chorale, and the piece ships.
+    def one(part_id):
+        # Optional: whatever goes wrong here, broken sections fall back to the
+        # chorale and the piece ships.
         try:
-            return _call_for_parts(_repair_prompt(plan, roster, written, broken, batch),
+            return _call_for_parts(_repair_prompt(plan, roster, written, broken, part_id),
                                    "repaired_parts", 0.2, model, deadline)
         except Exception as error:                      # noqa: BLE001
-            _log.warning("A repair batch failed; its phrases will be derived: %s", error)
+            _log.warning("A repair failed; its sections will be derived: %s", error)
             return []
 
     returned, finished = [], 0
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as pool:
-        for future in as_completed([pool.submit(one, batch) for batch in batches]):
+        for future in as_completed([pool.submit(one, pid) for pid in ids]):
             returned += future.result()
             finished += 1
             if report:
-                report("fixing", finished, len(batches))
+                report("fixing", finished, len(ids))
 
-    candidates = _by_phrase([row for row in returned if row.get("partId") in broken], plan)
-    merged = {pid: dict(phrases) for pid, phrases in written.items()}
+    candidates = _by_section([row for row in returned if row.get("partId") in broken], plan)
+    merged = {pid: dict(sections) for pid, sections in written.items()}
     improved = False
-    for part_id, phrases in candidates.items():
-        for phrase_id, text in phrases.items():
-            if phrase_id not in broken[part_id]:
+    for part_id, sections in candidates.items():
+        for index, text in sections.items():
+            if index not in broken[part_id]:
                 continue
-            text["performanceNote"] = (written[part_id].get(phrase_id) or {}) \
+            text["performanceNote"] = (written[part_id].get(index) or {}) \
                 .get("performanceNote", "")
-            trial = {part_id: {phrase_id: text}}
-            after = _check_written(plan, roster, trial, level).get(part_id, {}).get(phrase_id, [])
-            if len(after) < len(broken[part_id][phrase_id]):
-                merged[part_id][phrase_id] = text
+            after = _check_written(plan, roster, {part_id: {index: text}}, level) \
+                .get(part_id, {}).get(index, [])
+            if len(after) < len(broken[part_id][index]):
+                merged[part_id][index] = text
                 improved = True
     return merged, improved
 
 
 def _drop_misaligned(plan: dict, roster: list, written: dict, level: str) -> list:
-    """Remove any phrase that would break the ensemble. Returns the labels hit.
+    """Remove any section that would break the ensemble. Returns the labels hit.
 
-    A phrase with a short bar would pull every part after it out of line, and a
-    phrase off the chord on its strong beats would sour every section it is
-    heard in. Neither is used: that part plays its chorale voice for that
-    phrase instead — plainer, but exactly in time and in tune. A note out of
-    range is left in and reported; it does not stop the ensemble playing
-    together.
+    A section with a short bar would pull every part after it out of line, and
+    one off the chord on its beats would sour the harmony. Neither is used: the
+    part plays its chorale line there instead — plainer, but exactly in time and
+    in tune. A note out of range is left in and reported.
     """
     by_id = {part["partId"]: part for part in roster}
     dropped = []
-    for part_id, phrases in _check_written(plan, roster, written, level).items():
-        for phrase_id, problems in phrases.items():
+    for part_id, sections in _check_written(plan, roster, written, level).items():
+        for index, problems in sections.items():
             if any("units long" in p or "bars; it must have" in p
                    or "clashes with the harmony" in p for p in problems):
-                written[part_id].pop(phrase_id, None)
-                dropped.append(f"{by_id[part_id]['label']} (phrase {phrase_id})")
+                written[part_id].pop(index, None)
+                dropped.append(f"{by_id[part_id]['label']} (section s{index + 1}: "
+                               f"{problems[0][:140]})")
     return dropped
 
 

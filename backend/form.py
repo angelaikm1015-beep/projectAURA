@@ -185,7 +185,7 @@ def chord_pcs(symbol: str):
     tones = {0, third, fifth}
     plain = lambda n: re.search(rf"(?<![#b\d]){n}(?!\d)", q) is not None
     six_nine = "6/9" in q or "69" in q
-    extended = plain("9") or plain("11") or plain("13")
+    extended = (plain("9") or plain("11") or plain("13")) and "add" not in low
     if "maj7" in low or "M7" in q or "Δ" in q or "maj9" in low or "maj13" in low:
         tones.add(11)
     elif "dim7" in low or "°7" in q:
@@ -248,7 +248,7 @@ def harmonise(voices: dict, chords: list, beat: Fraction) -> int:
             for midi, dur in bar:
                 on_beat = position % beat == 0
                 if voice == "soprano":
-                    on_beat = on_beat and (dur >= 2 * beat or (position == 0 and dur >= beat))
+                    on_beat = on_beat and dur >= beat
                 if midi is not None and on_beat and midi % 12 not in pcs:
                     midi = _nearest_in(midi, pcs)
                     moved += 1
@@ -490,6 +490,10 @@ def realise(plan: dict, roster: list, sections: list, phrases: dict, units: Frac
     written_ids = set(phrase_text)
     section_roles = [roles(s, roster, assigned, written_ids) for s in sections]
     rest = orchestrate.rest_bar(units)
+    context = {"written": written_ids,
+               "level": plan.get("_level") or "intermediate",
+               "beat": beat_units(plan.get("timeSignature")),
+               "bpm": plan.get("tempoBpm") or 100}
 
     out = []
     for part in roster:
@@ -507,8 +511,8 @@ def realise(plan: dict, roster: list, sections: list, phrases: dict, units: Frac
         # piece, so the line does not jump about between sections.
         own = [e for s, r in zip(sections, section_roles) if r[pid] != "rest"
                for e in _section_events(phrases[s["phrase"]], voice, s)]
-        base = orchestrate.fit_octave(orchestrate.transpose(own, -transpose), part) \
-            if part["pitched"] else 0
+        base = orchestrate.fit_octave(orchestrate.transpose(own, -transpose), part,
+                                      context["level"]) if part["pitched"] else 0
 
         upper, lower = [], []
         current_key, last_dynamic, was_resting = home_written, None, True
@@ -522,12 +526,18 @@ def realise(plan: dict, roster: list, sections: list, phrases: dict, units: Frac
                 bars_up = [rest] * s["bars"]
                 bars_low = [rest] * s["bars"]
             else:
+                own_text = mine.get(index)
                 bars_up, bars_low = _play(part, s, role, voice, treatment, phrases,
-                                          mine.get(s["phrase"]), base, home_written,
-                                          key, units, low, high)
-                bars_up = _decorate(bars_up, s, was_resting, last_dynamic)
-                if bars_low:
-                    bars_low = _decorate(bars_low, s, was_resting, last_dynamic)
+                                          own_text, base, home_written,
+                                          key, units, low, high, context)
+                if own_text and own_text.get("abc"):
+                    # Written for this section: its own dynamics and hairpins stand,
+                    # and the section's level is added only if it gave none.
+                    bars_up = _level_if_missing(bars_up, s, was_resting, last_dynamic)
+                else:
+                    bars_up = _decorate(bars_up, s, was_resting, last_dynamic)
+                    if bars_low:
+                        bars_low = _decorate(bars_low, s, was_resting, last_dynamic)
                 last_dynamic = s["dynamic"]
             was_resting = role == "rest"
 
@@ -567,16 +577,14 @@ def _join(sections: list) -> str:
 
 
 def _play(part, section, role, voice, treatment, phrases, decorated, base,
-          home_written, key, units, low, high) -> tuple:
+          home_written, key, units, low, high, context) -> tuple:
     """(upper bars, lower bars or []) for a part that is playing this section."""
     phrase = phrases[section["phrase"]]
     span = slice(section["from"], section["to"])
 
     if decorated and decorated.get("abc"):
-        return (_move_text(decorated["abc"], part, section, home_written, key, low, high,
-                           span),
-                _move_text(decorated["abcLower"], part, section, home_written, key,
-                           None, None, span) if decorated.get("abcLower") else [])
+        # Written for this very section, already in its key: used as it is.
+        return orchestrate.split_bars(decorated["abc"]), []
 
     if not part["pitched"]:
         return [percussion_bar(units)] * section["bars"], []
@@ -584,10 +592,15 @@ def _play(part, section, role, voice, treatment, phrases, decorated, base,
     if part["instrument"] == "Timpani":
         return _timpani(phrase, section, part, key, units), []
 
-    line = "soprano" if role == "lead" else voice
+    if part["staves"] == 2:
+        return keyboard(phrase, section, part, role, key, units, context["level"],
+                        context["beat"], context["bpm"])
+
+    line = "soprano" if role == "lead" else guide_voice(section, part["partId"], voice,
+                                                         context.get("written", ()))
     sustained = role == "sustain" or (role != "lead" and treatment == "sustained")
     upper = _derive(phrase, line, section, part, base if line == voice else None,
-                    key, units, sustained)
+                    key, units, sustained, level=context["level"])
     lower = []
     if part["staves"] == 2:
         # A grand staff gets the bass in the left hand rather than a copy of
@@ -620,7 +633,7 @@ def _timpani(phrase, section, part, key, units) -> list:
 
 
 def _derive(phrase, voice, section, part, base, key, units, sustained,
-            left_hand=None) -> list:
+            left_hand=None, level="intermediate") -> list:
     """One voice of one section, at this player's written pitch and octave.
 
     ``left_hand`` is a (low, high) range for a piano's lower stave, which reads
@@ -631,7 +644,7 @@ def _derive(phrase, voice, section, part, base, key, units, sustained,
     low, high = left_hand or orchestrate.range_of(part)
     if base is None:
         base = orchestrate.octave_shift_for(events, low, high) if left_hand \
-            else orchestrate.fit_octave(events, part)
+            else orchestrate.fit_octave(events, part, level)
     shift = _best_shift(events, low, high, base)
     events = orchestrate.transpose(events, 12 * shift)
     if sustained:
@@ -667,7 +680,8 @@ def phrase_line(plan: dict, phrases: dict, part: dict, voice: str, phrase_id: st
     whole = {"from": 0, "to": phrase["bars"], "transpose": 0}
     events = orchestrate.transpose(_section_events(phrase, voice, whole),
                                    -int(part["transpose"]))
-    events = orchestrate.transpose(events, 12 * orchestrate.fit_octave(events, part))
+    events = orchestrate.transpose(
+        events, 12 * orchestrate.fit_octave(events, part, plan.get("_level") or "intermediate"))
     return " | ".join(orchestrate.render_bars(events, written_key_for(part, home), units)) + " |"
 
 
@@ -741,16 +755,26 @@ def harmony_clashes(text: str, part: dict, phrase: dict, home_written: str,
         return []
     bars = orchestrate.read_bars(text, home_written)
     chord = phrase["voices"]
+    bars = [[(max(m) if isinstance(m, tuple) else m, d) for m, d in bar] for bar in bars]
     checked, off, held, first = 0, 0, None, None
 
+    symbols = phrase.get("chords") or []
+
     def chorale_at(index, at):
-        return {m % 12 for m in (_sounding_at(chord[v][index], at) for v in VOICES)
-                if m is not None}
+        # The chord is what the four voices sound plus what its symbol names:
+        # the keyboard plays the symbol's ninths and sixths even where the
+        # chorale voices leave them out.
+        pcs = {m % 12 for m in (_sounding_at(chord[v][index], at) for v in VOICES)
+               if m is not None}
+        named = chord_pcs(symbols[index]) if index < len(symbols) else None
+        return pcs | (named or set())
 
     for index, bar in enumerate(bars[:phrase["bars"]]):
         position = Fraction(0)
         for midi, dur in bar:
-            if midi is not None and position % beat == 0:
+            # Figuration shorter than half a beat — a run that starts on a
+            # passing note — is not heard as harmony and is not held to it.
+            if midi is not None and position % beat == 0 and dur * 2 >= beat:
                 pcs = chorale_at(index, position)
                 sounding = (midi + int(part["transpose"])) % 12
                 if pcs:
@@ -794,10 +818,18 @@ def balance_voices(plan: dict, roster: list) -> None:
     lowest instrument plays the bass, and any voice nobody was given takes a
     player from the most crowded line, the one whose register suits it best.
     """
-    pitched = [part for part in roster if part["pitched"]]
-    if not pitched:
-        return
+    # Keyboards play the whole harmony and are left out of the line-counting;
+    # timpani only strike the bass and cannot carry a line either.
+    pitched = [part for part in roster if part["pitched"] and part["staves"] == 1
+               and part["instrument"] != "Timpani"]
     entries = {entry.get("partId"): entry for entry in plan.get("partPlan") or []}
+    for part in roster:
+        if part["staves"] == 2 or part["instrument"] == "Timpani":
+            entries.setdefault(part["partId"], {"partId": part["partId"], "voice": "bass",
+                                                "treatment": "plain", "role": ""})
+    if not pitched:
+        plan["partPlan"] = [entries[p["partId"]] for p in roster if p["partId"] in entries]
+        return
     for part in pitched:
         entry = entries.setdefault(part["partId"], {"partId": part["partId"],
                                                     "treatment": "plain", "role": ""})
@@ -890,7 +922,7 @@ def assign_parts(plan: dict, roster: list, sections: list) -> None:
         middle = _sounding_middle(part)
         voice = min(VOICES, key=lambda v: abs(REGISTER[v] - middle))
         treatment = "plain"
-        if (part["partId"] in leads and part["pitched"]
+        if (part["partId"] in leads and part["pitched"] and part["staves"] == 1
                 and part["instrument"] != "Timpani" and voice in ("soprano", "alto")):
             voice, treatment = "soprano", "decorated"
         elif part["instrument"] == "French horn" and voice in ("alto", "tenor"):
@@ -901,3 +933,379 @@ def assign_parts(plan: dict, roster: list, sections: list) -> None:
         entries.append({"partId": part["partId"], "voice": voice,
                         "treatment": treatment, "role": role})
     plan["partPlan"] = entries
+
+
+# ---------------------------------------------------------------------------
+# Keyboards: the whole harmony, written for two hands
+# ---------------------------------------------------------------------------
+#
+# A piano doubling one chorale line is not a piano part. In a duo it was the
+# only harmony instrument, and handing it a single line left the violin over
+# a bare bass — no chords at all. A keyboard plays the whole harmony: the bass
+# in the left hand, the chord in the right, laid out the way pianists actually
+# write it — broken chords when it is quiet, octaves and full chords when it is
+# loud, the tune on top with chord tones under it when it leads.
+#
+# Every pitch is taken from the chord sounding at that beat, so however busy
+# the figuration gets, it cannot disagree with anyone else in the ensemble.
+
+LH_RANGE = (31, 57)        # G1 .. A3
+RH_RANGE = (57, 86)        # A3 .. D6
+
+
+def _subdivisions(level: str, beat: Fraction, bpm: int, loud: bool) -> int:
+    """Notes per beat for broken-chord figuration."""
+    if level in ("beginner",):
+        return 1
+    if level == "intermediate":
+        return 2 if beat == 2 else 3
+    fast = (bpm or 100) > (132 if beat == 2 else 100)
+    if level == "pro" and not fast:
+        return 4 if beat == 2 else 6          # sixteenths
+    return 2 if beat == 2 else 3              # eighths
+
+
+def _beat_chords(phrase: dict, section: dict, beat: Fraction, units: Fraction,
+                 shift: int) -> list:
+    """[(bar index, beat position, pitch classes, bass, soprano)] for a section."""
+    out = []
+    for index in range(section["from"], section["to"]):
+        symbol = phrase["chords"][index] if index < len(phrase["chords"]) else ""
+        symbol_pcs = chord_pcs(symbol)
+        position = Fraction(0)
+        while position < units:
+            sounding = {v: _sounding_at(phrase["voices"][v][index], position) for v in VOICES}
+            move = shift + section["transpose"]
+            voice_pcs = {(m + move) % 12 for m in sounding.values() if m is not None}
+            pcs = {(p + section["transpose"]) % 12 for p in symbol_pcs} if symbol_pcs \
+                else voice_pcs
+            bass = sounding["bass"]
+            top = sounding["soprano"]
+            out.append((index, position, pcs or voice_pcs,
+                        None if bass is None else bass + move,
+                        None if top is None else top + move))
+            position += beat
+    return out
+
+
+def _into(midi: int, low: int, high: int) -> int:
+    while midi < low:
+        midi += 12
+    while midi > high:
+        midi -= 12
+    return midi
+
+
+def _spaced_tones(bass: int, pcs: set, span: int = 22) -> list:
+    """Chord tones rising from the bass, at least a minor third apart."""
+    tones = [bass]
+    for m in range(bass + 1, bass + span):
+        if m % 12 in pcs and m - tones[-1] >= 3:
+            tones.append(m)
+    return tones
+
+
+def _rh_chord(pcs: set, near_top: int, size: int, ceiling: int = None) -> tuple:
+    """A close-position chord whose top note is the chord tone nearest ``near_top``."""
+    top = min((m for m in range(RH_RANGE[0] + 7, RH_RANGE[1] + 1) if m % 12 in pcs
+               and (ceiling is None or m <= ceiling)),
+              key=lambda m: abs(m - near_top), default=None)
+    if top is None:
+        return ()
+    notes = [top]
+    m = top - 1
+    while len(notes) < size and m >= RH_RANGE[0]:
+        if m % 12 in pcs and m % 12 not in {n % 12 for n in notes}:
+            notes.append(m)
+        m -= 1
+    return tuple(sorted(notes))
+
+
+def keyboard(phrase: dict, section: dict, part: dict, role: str, key: str,
+             units: Fraction, level: str, beat: Fraction, bpm: int) -> tuple:
+    """(right hand bars, left hand bars) for a keyboard in one section."""
+    shift = -int(part["transpose"])
+    loud = section["dynamic"] in ("f", "ff")
+    beats = _beat_chords(phrase, section, beat, units, shift)
+    sub = _subdivisions(level, beat, bpm, loud)
+    advanced = level in ("higher-intermediate", "pro")
+
+    right, left = [], []
+    previous_top = 76
+    for bar_number in range(section["from"], section["to"]):
+        rh, lh = [], []
+        bar_beats = [b for b in beats if b[0] == bar_number]
+        for _, position, pcs, bass, top in bar_beats:
+            length = min(beat, units - position)
+            if bass is None:
+                lh.append((None, length))
+            else:
+                low = _into(bass, *LH_RANGE)
+                if role == "sustain":
+                    lh.append((low, length))
+                elif loud and advanced:
+                    # Octaves in the bass: the sound of a full keyboard tutti.
+                    octave = (low - 12, low) if low - 12 >= 24 else (low, low + 12)
+                    lh.append((octave, length))
+                elif sub > 1:
+                    tones = _spaced_tones(low, pcs)
+                    shape = list(range(len(tones))) + list(range(len(tones) - 2, 0, -1))
+                    step = length / sub
+                    for i in range(sub):
+                        lh.append((tones[shape[i % len(shape)]], step))
+                else:
+                    lh.append((low, length))
+
+            if role == "lead":
+                continue                       # the tune is written below, bar by bar
+            size = 4 if loud else 3
+            if loud and top is not None:
+                target = _into(top, RH_RANGE[0] + 12, RH_RANGE[1])
+            else:
+                target = previous_top
+            chord = _rh_chord(pcs, target, size)
+            if chord:
+                previous_top = max(chord)
+            if role == "sustain" or not chord:
+                rh.append((chord or None, length))
+            elif loud and level == "pro" and beat == 2:
+                rh += [(chord, length / 2), (chord, length / 2)]   # driving repeated chords
+            elif not loud and advanced and position != 0:
+                # Off the beat when it is quiet: the left hand has the pulse.
+                rh += [(None, length / 2), (chord, length / 2)]
+            else:
+                rh.append((chord, length))
+
+        if role == "lead":
+            # The tune on top, with the chord under it on every beat — in
+            # octaves when it is loud and the player is advanced.
+            position = Fraction(0)
+            bar_chords = {b[1]: b[2] for b in bar_beats}
+            for midi, dur in phrase["voices"]["soprano"][bar_number]:
+                if midi is None:
+                    rh.append((None, dur))
+                else:
+                    note = _into(midi + shift + section["transpose"], RH_RANGE[0] + 10,
+                                 RH_RANGE[1])
+                    pcs = bar_chords.get(position)
+                    if pcs is not None and note % 12 in pcs:
+                        under = _rh_chord(pcs, note, 3 if loud else 2, ceiling=note)
+                        notes = set(under) | {note}
+                        if loud and advanced and note - 12 >= RH_RANGE[0]:
+                            notes.add(note - 12)
+                        rh.append((tuple(sorted(notes)), dur))
+                    else:
+                        rh.append((note, dur))
+                position += dur
+
+        right.append(orchestrate.fit_bar(rh, units))
+        left.append(orchestrate.fit_bar(lh, units))
+
+    events_r = [e for bar in right for e in bar]
+    events_l = [e for bar in left for e in bar]
+    if role == "sustain":
+        events_r = orchestrate.merge_repeats(events_r)
+        events_l = orchestrate.merge_repeats(events_l)
+    return (orchestrate.render_bars(events_r, key, units),
+            orchestrate.render_bars(events_l, key, units))
+
+
+
+# ---------------------------------------------------------------------------
+# Per-section writing for the model's lines
+# ---------------------------------------------------------------------------
+
+LEVEL_MARK_RE = re.compile(r"!(?:p{1,4}|mp|mf|f{1,4}|sfz|fp)!")
+
+
+def _level_if_missing(bars: list, section: dict, entering: bool, previous_dynamic) -> list:
+    if not bars or LEVEL_MARK_RE.search(bars[0]):
+        return bars
+    if entering or section["dynamic"] != previous_dynamic:
+        bars = list(bars)
+        bars[0] = _after_fields(bars[0], f"!{section['dynamic']}!")
+    return bars
+
+
+def guide_voice(section: dict, part_id: str, voice: str, written_ids) -> str:
+    """The chorale line a melody player follows in one section.
+
+    A melody player who is not leading this section does not double whoever
+    is: it takes the alto line and writes a counter-melody around it. That is
+    the difference between a duo and two people playing the same tune.
+    """
+    if part_id in written_ids and section["lead"] and section["lead"] != part_id \
+            and voice == "soprano":
+        return "alto"
+    return voice
+
+
+def section_chorale(phrases: dict, section: dict) -> dict:
+    """The chorale under one section: its bars, moved into the section's key."""
+    phrase = phrases[section["phrase"]]
+    span = slice(section["from"], section["to"])
+    return {
+        "bars": section["bars"],
+        "voices": {v: [[(None if m is None else m + section["transpose"], d) for m, d in bar]
+                       for bar in phrase["voices"][v][span]] for v in VOICES},
+        "chords": [orchestrate.transpose_chord(c, section["transpose"], section["key"])
+                   for c in phrase["chords"][span]],
+    }
+
+
+def statement_numbers(sections: list) -> list:
+    """For each section, which hearing of its phrase this is: 1, 2, 3 …"""
+    seen, out = {}, []
+    for s in sections:
+        seen[s["phrase"]] = seen.get(s["phrase"], 0) + 1
+        out.append(seen[s["phrase"]])
+    return out
+
+
+def section_line(plan: dict, part: dict, section: dict, voice: str, units: Fraction) -> str:
+    """One section of a part's guide line, at written pitch in the section's key."""
+    chorale = section_chorale(plan["_phrases"], section)
+    events = [e for bar in chorale["voices"][voice] for e in bar]
+    events = orchestrate.transpose(events, -int(part["transpose"]))
+    events = orchestrate.transpose(
+        events, 12 * orchestrate.fit_octave(events, part, plan.get("_level") or "intermediate"))
+    key = written_key_for(part, section["key"])
+    return " | ".join(orchestrate.render_bars(events, key, units)) + " |"
+
+
+
+def snap_held(text: str, part: dict, chorale: dict, key: str, beat: Fraction,
+              units: Fraction) -> str:
+    """Move a hand-written line's held clashes onto the chord, and nothing else.
+
+    A note that starts on a beat and lasts a beat or more, and is not sounding
+    in the chorale at that moment, is moved to the nearest note that is. Every
+    other note — passing notes, runs, ornaments — and all the rhythm,
+    articulation and dynamics are kept exactly. This rescues a fine line with
+    one wrong long note instead of throwing the whole section away.
+    """
+    if not part["pitched"] or not text:
+        return text
+    shift = int(part["transpose"])
+    bars = orchestrate.split_bars(text)
+    fixed = []
+    for index, bar in enumerate(bars):
+        if index >= chorale["bars"]:
+            fixed.append(bar)
+            continue
+        events = orchestrate.read_bars(bar, key)
+        events = events[0] if events else []
+        plan, position = [], Fraction(0)
+        for midi, dur in events:
+            if midi is not None and not isinstance(midi, tuple) and position % beat == 0 \
+                    and dur >= beat:
+                pcs = {m % 12 for m in (_sounding_at(chorale["voices"][v][index], position)
+                                        for v in VOICES) if m is not None}
+                symbols = chorale.get("chords") or []
+                pcs |= (chord_pcs(symbols[index]) if index < len(symbols) else None) or set()
+                if pcs and (midi + shift) % 12 not in pcs:
+                    plan.append(_nearest_in(midi + shift, pcs) - shift)
+                    position += dur
+                    continue
+            plan.append(None)
+            position += dur
+        fixed.append(orchestrate.remap_notes(bar, key, plan))
+    return " | ".join(fixed) + " |"
+
+
+# ---------------------------------------------------------------------------
+# Fixing a hand-written line's arithmetic in place
+# ---------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(r"(?P<pitch>[\^_=]*[A-Ga-g][,']*|[zx])(?P<dur>\d*/*\d*)")
+
+
+def _last_token(bar: str):
+    """(start, duration start, duration end, kind) of the bar's last note/rest/chord."""
+    last, i, n = None, 0, len(bar)
+    while i < n:
+        ch = bar[i]
+        if ch in "!\"":
+            j = bar.find(ch, i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "{":
+            j = bar.find("}", i)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "[" and abc_check.INLINE_FIELD_RE.match(bar, i):
+            j = bar.find("]", i)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "[":
+            j = bar.find("]", i)
+            if j < 0:
+                break
+            match = abc_check.DURATION_RE.match(bar, j + 1)
+            last = (i, j + 1, match.end(), "chord")
+            i = match.end()
+            continue
+        match = _TOKEN_RE.match(bar, i)
+        if match and match.group("pitch"):
+            last = (i, match.start("dur"), match.end("dur"), "note")
+            i = match.end()
+            continue
+        i += 1
+    return last
+
+
+def fix_bar(bar: str, units: Fraction) -> str:
+    """Make one hand-written bar exactly ``units`` long, changing as little as possible.
+
+    Short: a rest fills the gap. Long: the last note is shortened, or dropped
+    if the overflow is longer than it. Bars with tuplets or broken rhythm are
+    left alone — their arithmetic is not certain enough to edit.
+    """
+    if re.search(r"\(\d|[<>]", bar):
+        return bar
+    for _ in range(8):
+        length = sum((b.length for b in abc_check.bar_lengths(bar) if b.length > 0),
+                     Fraction(0))
+        if length == units:
+            return bar
+        if length < units:
+            return bar.rstrip() + " z" + orchestrate._duration(units - length)
+        excess = length - units
+        token = _last_token(bar)
+        if token is None:
+            return bar
+        start, dur_start, dur_end, kind = token
+        current = abc_check._read_duration(bar, dur_start)[0]
+        if kind == "note" and current > excess:
+            bar = bar[:dur_start] + orchestrate._duration(current - excess) + bar[dur_end:]
+        else:
+            bar = (bar[:start] + bar[dur_end:]).rstrip()
+    return bar
+
+
+def fix_line(text: str, bars: int, units: Fraction, part: dict, key: str) -> str:
+    """Bar lengths, bar count and range of a hand-written section, fixed in place."""
+    split = orchestrate.split_bars(text or "")
+    if not split:
+        return text
+    split = [fix_bar(bar, units) for bar in split[:bars]]
+    if len(split) == bars - 1:
+        split.append(orchestrate.rest_bar(units))     # one bar short: let it breathe
+    low, high = orchestrate.range_of(part)
+    if part["pitched"] and low is not None:
+        fitted = []
+        for bar in split:
+            events = (orchestrate.read_bars(bar, key) or [[]])[0]
+            plan = []
+            for midi, _ in events:
+                if midi is None or isinstance(midi, tuple):
+                    plan.append(None)
+                elif midi < low:
+                    plan.append(midi + 12 * -(-(low - midi) // 12))
+                elif midi > high:
+                    plan.append(midi - 12 * -(-(midi - high) // 12))
+                else:
+                    plan.append(None)
+            fitted.append(orchestrate.remap_notes(bar, key, plan))
+        split = fitted
+    return " | ".join(split) + " |"

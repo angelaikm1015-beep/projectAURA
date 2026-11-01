@@ -448,7 +448,13 @@ def render_bars(events: list, key: str, units_per_bar: Fraction) -> list:
         while remaining > 0:
             room = units_per_bar - filled
             take = min(room, remaining)
-            token = "z" if midi is None else state.write(midi)
+            if midi is None:
+                token = "z"
+            elif isinstance(midi, (tuple, list)):
+                # A chord: every note spelled against the same bar state.
+                token = "[" + "".join(state.write(m) for m in sorted(set(midi))) + "]"
+            else:
+                token = state.write(midi)
             bar.append(token + _duration(take))
             # A note split by a barline is tied across it.
             if take < remaining and midi is not None:
@@ -483,9 +489,16 @@ def range_of(part: dict, which: str = "fullRange") -> tuple:
             abc_check.parse_scientific(text.split("-")[-1]))
 
 
-def fit_octave(events: list, part: dict) -> int:
-    """octave_shift_for() against this player's full and comfortable ranges."""
-    return octave_shift_for(events, *range_of(part), *range_of(part, "easyRange"))
+# Set per generation: above intermediate the comfortable range is a preference
+# a player has outgrown, and holding a pro violinist to it drops the tune an
+# octave into the instrument's dullest register.
+EASY_RANGE_LEVELS = ("beginner", "intermediate")
+
+
+def fit_octave(events: list, part: dict, level: str = "intermediate") -> int:
+    """octave_shift_for() against this player's full (and, below advanced, comfortable) range."""
+    easy = range_of(part, "easyRange") if level in EASY_RANGE_LEVELS else (None, None)
+    return octave_shift_for(events, *range_of(part), *easy)
 
 
 def derive_part(voice_abc: str, part: dict, concert_key: str,
@@ -539,3 +552,58 @@ def transpose_chord(symbol: str, semitones: int, key: str) -> str:
         pc = PITCH_OF_KEY.get(match.group(2) + match.group(3), 0)
         return match.group(1) + names[(pc + semitones) % 12]
     return CHORD_ROOT_RE.sub(move, str(symbol or ""))
+
+
+
+def remap_notes(bar: str, key: str, replacements: list) -> str:
+    """Rewrite one bar of ABC, replacing the pitch of its n-th note or chord.
+
+    ``replacements`` has one entry per note/rest/chord event in the bar, in
+    order: a MIDI number to substitute, or None to keep it. Everything else in
+    the text is kept, and every note is respelled so the bar's accidentals stay
+    correct after the change.
+    """
+    if not any(r is not None for r in replacements):
+        return bar
+    reader, writer = _BarState(Key(key)), _BarState(Key(key))
+    out, i, n, event = [], 0, len(bar), 0
+    while i < n:
+        ch = bar[i]
+        if ch in "!\"":
+            j = bar.find(ch, i + 1)
+            j = n if j < 0 else j + 1
+            out.append(bar[i:j]); i = j; continue
+        if ch == "{":                                   # grace notes: kept, not counted
+            j = bar.find("}", i)
+            j = n if j < 0 else j + 1
+            out.append(bar[i:j]); i = j; continue
+        if ch == "[" and abc_check.INLINE_FIELD_RE.match(bar, i):
+            j = bar.find("]", i)
+            j = n if j < 0 else j + 1
+            out.append(bar[i:j]); i = j; continue
+        if ch == "[":                                   # a chord counts as one event
+            j = bar.find("]", i)
+            j = n if j < 0 else j + 1
+            inner = bar[i:j]
+            notes = []
+            for match in NOTE_ONLY.finditer(inner):
+                notes.append(reader.read(match.group("acc") or "", match.group("letter"),
+                                         match.group("marks")))
+            rebuilt, k = [], 0
+            for match in NOTE_ONLY.finditer(inner):
+                rebuilt.append(inner[k:match.start()])
+                rebuilt.append(writer.write(notes.pop(0)))
+                k = match.end()
+            rebuilt.append(inner[k:])
+            out.append("".join(rebuilt)); i = j; event += 1; continue
+        if ch in "zx":
+            out.append(ch); i += 1; event += 1; continue
+        match = NOTE_ONLY.match(bar, i)
+        if match:
+            midi = reader.read(match.group("acc") or "", match.group("letter"),
+                               match.group("marks"))
+            new = replacements[event] if event < len(replacements) else None
+            out.append(writer.write(midi if new is None else new))
+            i = match.end(); event += 1; continue
+        out.append(ch); i += 1
+    return "".join(out)

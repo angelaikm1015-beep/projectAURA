@@ -417,7 +417,7 @@ export const OPTIONS = {
     {
       "value": "college",
       "label": "College / University",
-      "guidance": "Rehearses efficiently and reads well. Expect counterpoint, meter changes and extended technique — writing down to this group wastes it."
+      "guidance": "Music majors. Their juries already demand three-octave scales and arpeggios in every key, double stops in thirds, sixths and octaves, a virtuoso étude and a concerto movement; their pianists audition with Chopin and Liszt études at full tempo. Write at that standard — a piece they could sight-read in one pass is too easy."
     },
     {
       "value": "community",
@@ -432,7 +432,7 @@ export const OPTIONS = {
     {
       "value": "professional",
       "label": "Professional ensemble",
-      "guidance": "One rehearsal, sight-read to a high standard. Write idiomatically, without hand-holding, and give every section something worth playing."
+      "guidance": "Orchestral and chamber professionals: one rehearsal, sight-read to a high standard. Write idiomatically and at full virtuoso difficulty, without hand-holding, and give every section something worth practising."
     }
   ],
   "levels": [
@@ -452,13 +452,13 @@ export const OPTIONS = {
       "value": "higher-intermediate",
       "label": "Higher intermediate",
       "years": "4 – 7 years",
-      "guidance": "An advanced player — a strong senior in a good high school programme, not a careful learner. Any key, up to six accidentals, modal and chromatic writing, and modulation to distant keys. Mixed and changing meter, cross-rhythm, triplets against duple, and fast sixteenth-note passagework that has to be practised. The full written range including the top of it. Real four-part counterpoint with genuinely independent lines, not melody over accompaniment. Extended solo lines, double stops and divisi for strings, and chromatic harmony — secondary dominants, borrowed chords, diminished passing chords. Everything articulated and dynamically shaped throughout."
+      "guidance": "Conservatory-audition standard — Henle difficulty 5-6, the level of a Brahms violin sonata or a Kreutzer étude. Any key, chromatic harmony and modulation. Fast sixteenth-note passagework that has to be practised, dotted and syncopated rhythm, triplets against duple, hemiola. The full written range including the top of it. Independent lines rather than doubling. Strings: up to seventh position, double stops, spiccato and fast string crossings. Winds and brass: the whole range, fast tonguing, wide slurred intervals. Piano: both hands busy — broken chords and scale runs in sixteenths, octaves. Everything articulated and shaped."
     },
     {
       "value": "pro",
       "label": "Pro",
       "years": "8+ years",
-      "guidance": "No restrictions, and no caution. Chromaticism and modulation as the music wants them, mixed meter, rubato, virtuosic runs, extremes of range and dynamic, and genuinely independent voices throughout. Write as you would for paid players who will read it once and perform it."
+      "guidance": "Virtuoso standard — Henle difficulty 7-8: a Paganini caprice, the Beethoven violin concerto, a Chopin or Liszt concert étude. No caution. Chromatic and extended harmony, real modulation, rubato. Rapid sixteenth- and thirty-second-note runs, arpeggios across the whole instrument, wide leaps, the extremes of range and dynamic, cross-rhythm. Strings: high positions, double stops in thirds, sixths and octaves, chords, ricochet and harmonics. Winds: double tonguing, altissimo, rapid chromatic runs. Write as for paid players who will read it once and perform it."
     }
   ],
   "moods": [
