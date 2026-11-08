@@ -141,6 +141,7 @@ def _compact(errors: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 MAX_NOTES_LENGTH = 500
+COMPOSE_MODES = {"light", "deep"}
 
 
 def validate_instruments(value) -> str | None:
@@ -198,4 +199,7 @@ def validate_composition(data: dict) -> dict:
         "conductor": None if isinstance(data.get("conductor"), bool)
                      else "Say whether there's a conductor.",
         "notes": notes_error,
+        # Optional: a request that doesn't say is a light one.
+        "mode": None if data.get("mode", "light") in COMPOSE_MODES
+                else "Choose light or deep composing.",
     })

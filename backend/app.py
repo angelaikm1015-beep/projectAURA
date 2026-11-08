@@ -12,6 +12,7 @@ Split of responsibilities:
 """
 
 import os
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,6 +24,7 @@ from google.api_core import exceptions as google_exceptions
 from werkzeug.exceptions import HTTPException
 
 import composer
+import deep
 import library
 import progress
 import options
@@ -175,6 +177,30 @@ def register_routes(app: Flask) -> None:
         # waits, so a six-minute request can say what it is doing.
         request_id = str(data.get("requestId") or "")
         roster_size = sum(int(e.get("parts", 1)) for e in data["instruments"])
+        brief = {
+            "instruments": data["instruments"],
+            "ensembleGroup": data["ensembleGroup"],
+            "level": data["level"],
+            "mood": data["mood"],
+            "conductor": data["conductor"],
+            "notes": data.get("notes") or "",
+            "mode": data.get("mode") or "light",
+        }
+
+        if brief["mode"] == "deep":
+            # Deep composing can take most of an hour, longer than any proxy or
+            # browser will hold a request open. It runs in the background and
+            # the client collects it from /api/compose/result/<id>.
+            if not request_id:
+                return jsonify({"message": "A deep composition needs a request id."}), 400
+            progress.start(request_id, roster_size,
+                           deep.estimate_seconds(roster_size, data["level"]),
+                           mode="deep", owner=g.uid)
+            threading.Thread(target=_compose_in_background, daemon=True,
+                             args=(app, request_id, g.uid, _display_name(), data, brief)
+                             ).start()
+            return jsonify({"requestId": request_id, "mode": "deep"}), 202
+
         progress.start(request_id, roster_size, progress.estimate_seconds(roster_size))
 
         try:
@@ -193,15 +219,6 @@ def register_routes(app: Flask) -> None:
             progress.finish(request_id, error="Something went wrong on our end.")
             raise
         progress.finish(request_id)
-
-        brief = {
-            "instruments": data["instruments"],
-            "ensembleGroup": data["ensembleGroup"],
-            "level": data["level"],
-            "mood": data["mood"],
-            "conductor": data["conductor"],
-            "notes": data.get("notes") or "",
-        }
 
         # Save before answering. A piece that reached the browser but not the
         # database is a piece the user loses by closing a tab, and it cost a
@@ -232,12 +249,26 @@ def register_routes(app: Flask) -> None:
             return jsonify({"message": "No generation with that id."}), 404
         return jsonify(state)
 
+    @app.get("/api/compose/result/<request_id>")
+    @require_auth
+    def compose_result(request_id):
+        """A finished deep composition. 404 until it is ready, and to anyone
+        but the person who asked for it."""
+        result = progress.result(request_id, g.uid)
+        if result is None:
+            return jsonify({"message": "That piece isn't ready."}), 404
+        return jsonify(result)
+
     @app.get("/api/compose/estimate")
     @require_auth
     def compose_estimate():
         """What to tell someone before they press the button."""
         parts = request.args.get("parts", type=int) or 1
-        return jsonify({"parts": parts, **progress.estimate_seconds(parts)})
+        if request.args.get("mode") == "deep":
+            estimate = deep.estimate_seconds(parts, request.args.get("level"))
+        else:
+            estimate = progress.estimate_seconds(parts)
+        return jsonify({"parts": parts, **estimate})
 
     # ---------- the library and the gallery ----------
 
@@ -406,6 +437,33 @@ def serve_spa():
                        "in frontend/, or use `npm run dev` for the Vite dev server on :5173.",
         }), 503
     return send_from_directory(FRONTEND_DIR, "index.html")
+
+
+def _compose_in_background(app: Flask, request_id: str, uid: str, owner_name: str,
+                           data: dict, brief: dict) -> None:
+    """A deep composition, start to finish, outside any request.
+
+    Saved to the library as soon as it exists, so the piece is kept even if
+    nobody is still polling for it.
+    """
+    try:
+        score = deep.compose(data, report=lambda stage, done, total: progress.report(
+            request_id, stage, done, total))
+    except composer.ComposerError as error:
+        app.logger.warning("Deep compose failed: %s", error)
+        progress.finish(request_id, error=str(error))
+        return
+    except Exception:                                   # noqa: BLE001
+        app.logger.exception("Deep compose failed")
+        progress.finish(request_id, error="Something went wrong on our end.")
+        return
+    try:
+        score_id = library.save(uid, owner_name, score, brief)
+    except Exception:                                   # noqa: BLE001
+        app.logger.exception("Could not save the generated score")
+        score_id = None
+    progress.finish(request_id, result={"score": score, "scoreId": score_id,
+                                        "request": brief})
 
 
 def _display_name() -> str:

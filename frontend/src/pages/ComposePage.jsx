@@ -29,7 +29,7 @@ import { ScoreView } from "../components/score-view";
 import { useAuth } from "../context/AuthContext";
 import {
   ApiError, compose, fetchComposeEstimate, fetchComposeProgress, fetchOptions,
-  reviseScore, undoRevision, updateScore,
+  reviseScore, undoRevision, updateScore, waitForComposition,
 } from "../lib/api";
 import { describeBrief } from "../lib/brief";
 import { OPTIONS } from "../lib/options-data";
@@ -41,6 +41,7 @@ const EMPTY = {
   mood: "",
   conductor: "",
   notes: "",
+  mode: "light",
 };
 
 const CONDUCTOR_CHOICES = [
@@ -57,6 +58,27 @@ const CONDUCTOR_CHOICES = [
     description:
       "One steady tempo throughout, with the cues players need to stay together " +
       "written into the parts themselves.",
+  },
+];
+
+// Two ways to write the piece. Light is quick because the model writes only the
+// themes and harmony and the parts are arranged from them by rule; deep has the
+// model compose every note of every part, and takes as long as that takes.
+const MODE_CHOICES = [
+  {
+    value: "light",
+    label: "Light composing",
+    description:
+      "Fast — usually a few minutes. GPT writes the themes and harmony, and the " +
+      "parts are arranged from them automatically.",
+  },
+  {
+    value: "deep",
+    label: "Deep composing",
+    description:
+      "GPT composes every note of every part, passage by passage, then checks and " +
+      "corrects it. Much richer, but it can take a long time — often 20–60 minutes " +
+      "for a full ensemble.",
   },
 ];
 
@@ -83,6 +105,7 @@ export default function ComposePage() {
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState(null);
   const [pending, setPending] = useState(false);
+  const [pendingMode, setPendingMode] = useState("light");
   const [step, setStep] = useState(0);
   const [progress, setProgress] = useState(null);
   const [elapsed, setElapsed] = useState(0);
@@ -127,8 +150,10 @@ export default function ComposePage() {
 
   // Ask the server where it has got to. A 404 just means it hasn't registered
   // the job yet, or it has already finished — neither is worth showing.
+  // A deep piece is polled by waitForComposition instead, which needs every
+  // reading anyway to know when to collect the result.
   useEffect(() => {
-    if (!pending || !requestId.current) return undefined;
+    if (!pending || pendingMode === "deep" || !requestId.current) return undefined;
     let stopped = false;
     const id = requestId.current;
 
@@ -143,18 +168,18 @@ export default function ComposePage() {
     poll();
     const timer = setInterval(poll, 2500);
     return () => { stopped = true; clearInterval(timer); };
-  }, [pending]);
+  }, [pending, pendingMode]);
 
   // What to promise before the button is pressed, keyed to the actual roster.
   const plannedParts = totalParts(values.instruments);
   useEffect(() => {
     if (!plannedParts) { setEstimate(null); return undefined; }
     let cancelled = false;
-    fetchComposeEstimate(plannedParts)
+    fetchComposeEstimate(plannedParts, values.mode, values.level)
       .then((range) => { if (!cancelled) setEstimate(range); })
       .catch(() => { /* the button still works without a promise attached */ });
     return () => { cancelled = true; };
-  }, [plannedParts]);
+  }, [plannedParts, values.mode, values.level]);
 
   const set = (field) => (event) => {
     const { value } = event.target;
@@ -191,6 +216,7 @@ export default function ComposePage() {
       mood: values.mood,
       conductor: values.conductor === "yes",
       notes: values.notes.trim(),
+      mode: values.mode,
     };
   }
 
@@ -198,9 +224,13 @@ export default function ComposePage() {
     setMessage(null);
     setProgress(null);
     requestId.current = (crypto.randomUUID?.() ?? String(Date.now() + Math.random()));
+    setPendingMode(sent.mode);
     setPending(true);
     try {
-      const result = await compose({ ...sent, requestId: requestId.current });
+      let result = await compose({ ...sent, requestId: requestId.current });
+      if (result.mode === "deep") {
+        result = await waitForComposition(result.requestId, setProgress);
+      }
       setScore(result.score);
       setBrief(describeBrief(options, sent));
       // The API saves every piece as it makes it. Without an id the score is
@@ -308,7 +338,7 @@ export default function ComposePage() {
         score={score}
         brief={brief}
         pending={pending}
-        pendingLabel={WAIT_STEPS[step]}
+        pendingLabel={progress?.label || WAIT_STEPS[step]}
         error={message?.kind === "error" ? message.text : null}
         visibility={saved?.visibility}
         caption={saved?.caption}
@@ -408,12 +438,24 @@ export default function ComposePage() {
           onChange={set("notes")}
         />
 
+        <p className="section-title">How should it be composed?</p>
+
+        <ChoiceCards
+          label="Composing mode"
+          name="mode"
+          options={MODE_CHOICES}
+          value={values.mode}
+          error={errors.mode}
+          onChange={set("mode")}
+        />
+
         <SubmitButton pending={pending} pendingLabel={WAIT_STEPS[step]}>
           Generate the sheet music
         </SubmitButton>
 
         {pending && (
           <GenerationProgress
+            mode={pendingMode}
             progress={progress}
             elapsed={elapsed}
             fallbackLabel={WAIT_STEPS[step]}
@@ -422,10 +464,16 @@ export default function ComposePage() {
 
         {!pending && estimate && plannedParts > 0 && (
           <p className="hint hint-standalone">
+            {values.mode === "deep" ? "Deep composing " : ""}
             {plannedParts} part{plannedParts === 1 ? "" : "s"} usually takes{" "}
-            <strong>{Math.round(estimate.lowSeconds / 60)}–
-            {Math.round(estimate.highSeconds / 60)} minutes</strong> — every bar of
-            every part is written, then checked and corrected before you see it.
+            <strong>{Math.max(1, Math.round(estimate.lowSeconds / 60))}–
+            {Math.round(estimate.highSeconds / 60)} minutes</strong>
+            {values.mode === "deep"
+              ? " — GPT composes every passage of every part, and then checks and " +
+                "corrects it. It's saved to your library when it's done, even if you " +
+                "close this page."
+              : " — every bar of every part is written, then checked and corrected " +
+                "before you see it."}
           </p>
         )}
       </form>

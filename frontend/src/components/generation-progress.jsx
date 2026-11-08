@@ -18,7 +18,7 @@ function clock(seconds) {
   return m ? `${m}m ${String(s).padStart(2, "0")}s` : `${s}s`;
 }
 
-export function GenerationProgress({ progress, elapsed, fallbackLabel }) {
+export function GenerationProgress({ progress, elapsed, fallbackLabel, mode = "light" }) {
   const percent = progress?.percent ?? 0;
   const label = progress?.label || fallbackLabel || "Starting…";
   const batches = progress && progress.total > 1
@@ -52,10 +52,19 @@ export function GenerationProgress({ progress, elapsed, fallbackLabel }) {
             : null}
       </p>
 
-      <p className="genprog__note">
-        Every bar of every part is written and then checked, so this is minutes
-        rather than seconds. Keep this tab open — closing it cancels the piece.
-      </p>
+      {mode === "deep" ? (
+        <p className="genprog__note">
+          Deep composing: GPT is composing every note of every part, passage by
+          passage, and correcting what doesn't fit. This can take a long time —
+          often 20–60 minutes. You can close this tab; the finished piece is saved
+          to your library either way.
+        </p>
+      ) : (
+        <p className="genprog__note">
+          Every bar of every part is written and then checked, so this is minutes
+          rather than seconds. Keep this tab open — closing it cancels the piece.
+        </p>
+      )}
     </section>
   );
 }

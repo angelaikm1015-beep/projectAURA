@@ -60,6 +60,8 @@ export const updateMe = (updates) =>
 /**
  * Generate a score. Slow by nature — the model is writing every part — so this
  * one deliberately has no client-side timeout beyond the browser's own.
+ * A light piece comes back in the response; a deep one answers 202 at once
+ * with `{ requestId, mode: "deep" }`, to be collected with waitForComposition.
  */
 export const compose = (payload) =>
   request("/api/compose", { method: "POST", body: payload, authenticated: true });
@@ -72,9 +74,50 @@ export const compose = (payload) =>
 export const fetchComposeProgress = (requestId) =>
   request(`/api/compose/progress/${requestId}`, { authenticated: true });
 
-/** How long a piece of this size usually takes, as a range. */
-export const fetchComposeEstimate = (parts) =>
-  request(`/api/compose/estimate?parts=${parts}`, { authenticated: true });
+/** How long a piece of this size usually takes in this mode, as a range. */
+export const fetchComposeEstimate = (parts, mode = "light", level = "") => {
+  const query = new URLSearchParams({ parts, mode });
+  if (level) query.set("level", level);
+  return request(`/api/compose/estimate?${query}`, { authenticated: true });
+};
+
+/** A finished deep composition: `{ score, scoreId, request }`. */
+export const fetchComposeResult = (requestId) =>
+  request(`/api/compose/result/${requestId}`, { authenticated: true });
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait for a deep composition, which runs on the server in the background and
+ * can take the better part of an hour. Polls its progress (handing every
+ * reading to `onProgress`) and resolves with the finished piece.
+ *
+ * Network blips are ridden out. Only a job the server no longer knows about —
+ * it was restarted, say — ends the wait, after a few minutes of silence.
+ */
+export async function waitForComposition(requestId, onProgress) {
+  let lostSince = null;
+  for (;;) {
+    await pause(4000);
+    let state;
+    try {
+      state = await fetchComposeProgress(requestId);
+      lostSince = null;
+    } catch (error) {
+      if (error.status === 404) {
+        lostSince ??= Date.now();
+        if (Date.now() - lostSince > 3 * 60 * 1000) {
+          throw new ApiError("The server lost track of this piece. If it finished, " +
+            "it is in your library; otherwise please generate it again.", 404);
+        }
+      }
+      continue;
+    }
+    onProgress?.(state);
+    if (state.stage === "failed") throw new ApiError(state.error || "Generation failed.", 502);
+    if (state.stage === "done") return fetchComposeResult(requestId);
+  }
+}
 
 /* ---------- the library and the gallery ----------
  *

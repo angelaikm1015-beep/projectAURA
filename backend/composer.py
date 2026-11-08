@@ -342,7 +342,7 @@ def _range_line(part, level_value):
     return f"{part['fullRange']} (written), full range available"
 
 
-def build_user_prompt(request: dict, roster: list) -> str:
+def build_user_prompt(request: dict, roster: list, length: str = None) -> str:
     group = options.ENSEMBLE_GROUPS_BY_VALUE[request["ensembleGroup"]]
     level = options.LEVELS_BY_VALUE[request["level"]]
     mood = options.MOODS_BY_VALUE[request["mood"]]
@@ -395,7 +395,7 @@ def build_user_prompt(request: dict, roster: list) -> str:
         "  articulation and harmony so that a listener would name this mood",
         "  without being told it.",
         "",
-        f"LENGTH: {measures} measures in total, built from a few phrases.",
+        length or f"LENGTH: {measures} measures in total, built from a few phrases.",
         "",
     ]
 
@@ -1910,6 +1910,16 @@ def compose(request: dict, report=None) -> dict:
     if dropped:
         _log.info("Phrases replaced by their chorale line: %s", ", ".join(dropped))
 
+    return package(score, roster, plan, warnings, repaired, model, mode="light")
+
+
+def package(score: dict, roster: list, plan: dict, warnings: list, repaired: bool,
+            model: str, mode: str) -> dict:
+    """The finished piece in the shape the API stores and the browser reads.
+
+    Shared by both composing modes, so a deep piece opens, plays, revises and
+    shares exactly like a light one.
+    """
     return {
         "title": score["title"],
         "tempoText": score["tempoText"],
@@ -1949,6 +1959,7 @@ def compose(request: dict, report=None) -> dict:
         "warnings": warnings,
         "repaired": repaired,
         "model": model,
+        "mode": mode,
     }
 
 

@@ -729,6 +729,136 @@ with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "u
 check("a rejected API key is explained, not retried into a generic failure",
       r.status_code == 502 and "OPENAI_API_KEY" in r.json["message"], (r.status_code, r.json))
 
+# --- deep composing ------------------------------------------------------
+# The model composes every passage; the fake one writes what each prompt asks
+# for, so the test follows the real call sequence. Its first draft of the oboe
+# in the opening passage has a short bar, which the correction round must fix.
+import re
+import time
+import deep
+
+for schema_name in ("PLAN_SCHEMA", "PASSAGE_SCHEMA"):
+    schema_problems = walk_schema(getattr(deep, schema_name))
+    check(f"deep.{schema_name} is valid for strict Structured Outputs",
+          not schema_problems, schema_problems)
+
+DEEP_PLAN = {
+    "title": "Deep Test", "tempoText": "Allegro", "tempoBpm": 120, "beatUnit": "1/4",
+    "timeSignature": "4/4", "concertKey": "C major",
+    "themes": [{"id": "A", "abc": "C2 E2 G2 c2 | c8 |", "description": "Rising."}],
+    "sections": [
+        {"label": "A", "bars": 20, "key": "C major", "chords": ["C"] * 20, "dynamic": "p",
+         "lead": "P4", "material": "A", "orchestration": "oboe tune"},
+        {"label": "B", "bars": 4, "key": "C major", "chords": ["C"], "dynamic": "f",
+         "lead": None, "material": "A fragments", "orchestration": "tutti"},
+    ],
+    "partRoles": [{"partId": "P1", "role": "Leads the strings."}],
+    "programNote": "A test.", "rehearsalTips": "Count.", "conductor": None,
+}
+deep_calls = []
+
+def deep_answer(**kwargs):
+    name = kwargs["response_format"]["json_schema"]["name"]
+    deep_calls.append(name)
+    if name == "deep_plan":
+        return FakeCompletion(DEEP_PLAN)
+    prompt = kwargs["messages"][1]["content"]
+    if name == "passage_fix":
+        ids = re.findall(r"^\[(P\d+)\]", prompt, re.M)
+        bars = int(re.search(r"EXACTLY (\d+) bars", prompt).group(1))
+    else:
+        ids = re.findall(r"^  \[(P\d+)\]", prompt.split("COMPOSE THESE PARTS NOW:")[1], re.M)
+        bars = int(re.search(r"EXACTLY (\d+) bars of section", prompt).group(1))
+    parts = []
+    for pid in ids:
+        line = " | ".join(["!mf! C2 E2 G2 c2"] * bars) + " |"
+        if name == "passage" and pid == "P4" and "NOW COMPOSE mm.1-" in prompt:
+            line = "C2 E2 G2 | " + line.split(" | ", 1)[1]
+        parts.append({"partId": pid, "abc": line,
+                      "abcLower": "C,8 |" * bars if pid == "P5" else None,
+                      "performanceNote": "Play."})
+    return FakeCompletion({"parts": parts})
+
+deep_client = mock.Mock()
+deep_client.chat.completions.create.side_effect = deep_answer
+deep_request = {**COMPOSE, "mode": "deep", "conductor": False}
+deep_prompts = []
+real_prompt = deep._passage_prompt
+with mock.patch.object(composer, "client", return_value=deep_client), \
+     mock.patch.object(deep, "GROUP_STAVES", 4), \
+     mock.patch.object(deep, "_passage_prompt",
+                       side_effect=lambda *a: deep_prompts.append(real_prompt(*a))
+                       or deep_prompts[-1]):
+    deep_score = deep.compose(deep_request)
+
+check("deep: one architecture call, then passages, then a correction",
+      deep_calls[0] == "deep_plan" and "passage" in deep_calls and "passage_fix" in deep_calls,
+      deep_calls)
+# 20 bars split into two passages of 10, plus one of 4; at 4 staves per group
+# the 5 parts (piano counts twice) need two groups per passage.
+check("deep: long sections are split evenly and groups stay under the staff limit",
+      deep_calls.count("passage") == 6, deep_calls.count("passage"))
+check("deep: the melody is composed first and the next group writes against it",
+      "[P4]" in deep_prompts[0].split("COMPOSE THESE PARTS NOW:")[1]
+      and "[P5]" in deep_prompts[1].split("COMPOSE THESE PARTS NOW:")[1]
+      and "ALREADY COMPOSED FOR THESE BARS" in deep_prompts[1]
+      and "ALREADY COMPOSED" not in deep_prompts[0], len(deep_prompts))
+check("deep: every part is the whole piece",
+      all(composer.abc_check.bar_count(p["abc"]) == 24 for p in deep_score["written"]),
+      [composer.abc_check.bar_count(p["abc"]) for p in deep_score["written"]])
+check("deep: the corrected bar is used, so nothing had to be padded",
+      not deep_score["warnings"] and not deep_score["repaired"], deep_score["warnings"])
+check("deep: piano gets its own left hand",
+      next(p for p in deep_score["written"] if p["partId"] == "P5")["abcLower"]
+      .startswith("C,8"))
+check("deep: double bar where a new section starts",
+      deep_score["written"][0]["abc"].count("||") == 1, deep_score["written"][0]["abc"][:200])
+check("deep: score says how it was made", deep_score["mode"] == "deep")
+check("deep: harmony and sections cover the piece",
+      len(deep_score["harmony"]) == 24 and deep_score["sections"][1]["fromMeasure"] == 21,
+      deep_score["sections"])
+
+# Through the API: 202 at once, then progress, then the result — only for its owner.
+deep_calls.clear()
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
+     mock.patch.object(composer, "client", return_value=deep_client), \
+     mock.patch.object(app_module.library, "save", return_value="deep-score-id"):
+    r = client.post("/api/compose", json={**deep_request, "requestId": "deep-1"},
+                    headers=AUTHED)
+    check("POST /api/compose deep -> 202 straight away",
+          r.status_code == 202 and r.json == {"requestId": "deep-1", "mode": "deep"}, r.json)
+    for _ in range(100):
+        state = client.get("/api/compose/progress/deep-1", headers=AUTHED).json
+        if state.get("stage") in ("done", "failed"):
+            break
+        time.sleep(0.05)
+    check("  progress reaches done, labelled as deep",
+          state.get("stage") == "done" and state.get("mode") == "deep" and state.get("ready"),
+          state)
+    check("  progress never leaks the result", "_result" not in state and "score" not in state)
+    r = client.get("/api/compose/result/deep-1", headers=AUTHED)
+    check("  result is collected with its saved id",
+          r.status_code == 200 and r.json["scoreId"] == "deep-score-id"
+          and r.json["request"]["mode"] == "deep" and r.json["score"]["mode"] == "deep",
+          r.status_code)
+
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "someone-else"}):
+    r = client.get("/api/compose/result/deep-1", headers=AUTHED)
+check("  someone else can't collect it", r.status_code == 404, r.status_code)
+
+r = as_user({**COMPOSE, "mode": "turbo"}, side_effect=AssertionError("must not reach the model"))
+check("POST /api/compose unknown mode -> 400", r.status_code == 400 and "mode" in r.json["errors"],
+      r.json)
+r = as_user({**deep_request}, side_effect=AssertionError("must not reach the model"))
+check("POST /api/compose deep without a request id -> 400", r.status_code == 400, r.status_code)
+
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}):
+    light = client.get("/api/compose/estimate?parts=15", headers=AUTHED).json
+    heavy = client.get("/api/compose/estimate?parts=15&mode=deep&level=pro",
+                       headers=AUTHED).json
+check("deep estimate is longer than light", heavy["typicalSeconds"] > light["typicalSeconds"],
+      (light, heavy))
+
 # --- error shapes --------------------------------------------------------
 r = client.get("/api/nope")
 check("unknown /api/ route -> JSON 404",

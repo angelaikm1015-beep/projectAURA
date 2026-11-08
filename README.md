@@ -229,6 +229,34 @@ into real SVG staves with **abcjs**, in the browser. So the user gets actual
 notation — reflowing, printable at full resolution, and playable through the Web
 Audio API to hear the piece before rehearsal.
 
+### Light and deep composing
+
+The compose page offers two modes.
+
+* **Light** (the default, `composer.compose`) is what's described above: the
+  model writes a chord grid and a few short four-voice phrases, and
+  [form.py](backend/form.py) expands them across the ensemble and the form. It
+  finishes in a few minutes, but most of each part is arranged by rule.
+* **Deep** ([backend/deep.py](backend/deep.py)) has the model compose every note.
+  One call with high reasoning effort sets out the themes, the form, a chord for
+  every bar, and each section's key, material and orchestration. Then every
+  passage of up to 16 bars is composed for the whole ensemble, about six staves
+  per call. The melody goes first, and each later group is shown what has
+  already been written for those bars. Python counts every bar and checks range
+  and held notes against the chords, then sends the defects back to the model
+  for up to two correction rounds. Only after that does it trim or pad a bar so
+  the staves line up.
+
+Deep mode takes roughly 10–60 minutes depending on ensemble size and level. That
+is longer than a proxy or browser will hold a request open, so `POST
+/api/compose` with `"mode": "deep"` answers `202` immediately and runs the piece
+in a background thread. The page polls `/api/compose/progress/<id>` and collects
+the piece from `/api/compose/result/<id>`. It is saved to the library either
+way, so closing the tab loses nothing. Tune it with `DEEP_PLAN_EFFORT` (default
+`high`), `DEEP_WRITE_EFFORT` (`medium`), `DEEP_REPAIR_EFFORT` (`medium`),
+`DEEP_CONCURRENCY` (`6` passages at once) and `DEEP_CALL_TIMEOUT` (`900`
+seconds).
+
 ### What makes the parts playable
 
 The brief sent to the model is built from

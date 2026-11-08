@@ -14,9 +14,13 @@ request it describes.
 import threading
 import time
 
-# How long a finished or abandoned entry sticks around. Long enough for the last
-# poll to land, short enough that a long-running server does not accumulate them.
-TTL_SECONDS = 15 * 60
+# How long a finished entry sticks around. Long enough for the last poll to
+# land — and for a deep piece, whose result is collected by a later poll — short
+# enough that a long-running server does not accumulate them.
+TTL_SECONDS = 60 * 60
+# A running entry is only given up on after this long. Deep composing takes the
+# better part of an hour for a big ensemble.
+RUNNING_TTL_SECONDS = 6 * 60 * 60
 
 # Measured on a 15-part, 40-bar brief with the configured model: planning ~90s,
 # one round of part-writing ~120s, the correction round ~90s when it is needed.
@@ -51,6 +55,21 @@ STAGE_LABELS = {
     "failed": "Stopped",
 }
 
+# Deep composing (deep.py) is one long architecture call and then almost
+# entirely passage writing; checking and correcting happen inside each passage.
+MODES = {
+    "light": {"order": STAGE_ORDER, "weights": STAGE_WEIGHTS, "seconds": STAGE_SECONDS,
+              "labels": STAGE_LABELS},
+    "deep": {
+        "order": ["planning", "writing", "engraving"],
+        "weights": {"planning": 0.1, "writing": 0.87, "engraving": 0.03},
+        "seconds": {"planning": 240, "writing": 300, "engraving": 2},
+        "labels": {**STAGE_LABELS,
+                   "planning": "Composing the themes, the form and every bar's harmony",
+                   "writing": "Composing every part, passage by passage, and checking it"},
+    },
+}
+
 _entries = {}
 _lock = threading.Lock()
 
@@ -80,16 +99,18 @@ def estimate_seconds(part_count: int, batch_size: int = 5) -> dict:
             "typicalSeconds": int((best + worst) / 2)}
 
 
-def start(request_id: str, part_count: int, estimate: dict) -> None:
+def start(request_id: str, part_count: int, estimate: dict, mode: str = "light",
+          owner: str | None = None) -> None:
     if not request_id:
         return
     _sweep()
     with _lock:
         _entries[request_id] = {
             "stage": "planning", "done": 0, "total": 1,
-            "partCount": part_count, **estimate,
+            "partCount": part_count, **estimate, "mode": mode,
             "startedAt": time.time(), "stageStartedAt": time.time(),
-            "finishedAt": None, "error": None,
+            "finishedAt": None, "error": None, "ready": False,
+            "_owner": owner, "_result": None,
         }
 
 
@@ -109,14 +130,25 @@ def report(request_id: str, stage: str, done: int, total: int) -> None:
         entry.update(stage=stage, done=done, total=max(1, total))
 
 
-def finish(request_id: str, error: str | None = None) -> None:
+def finish(request_id: str, error: str | None = None, result: dict | None = None) -> None:
+    """``result`` is kept for a background generation to be collected later."""
     if not request_id:
         return
     with _lock:
         entry = _entries.get(request_id)
         if entry is not None:
             entry.update(finishedAt=time.time(), error=error,
-                         stage="done" if error is None else "failed")
+                         stage="done" if error is None else "failed",
+                         ready=result is not None, _result=result)
+
+
+def result(request_id: str, owner: str) -> dict | None:
+    """The finished piece of a background generation — only for whoever asked."""
+    with _lock:
+        entry = _entries.get(request_id)
+        if entry is None or entry["_owner"] != owner:
+            return None
+        return entry["_result"]
 
 
 def read(request_id: str) -> dict | None:
@@ -124,11 +156,11 @@ def read(request_id: str) -> dict | None:
         entry = _entries.get(request_id)
         if entry is None:
             return None
-        entry = dict(entry)
+        entry = {key: value for key, value in entry.items() if not key.startswith("_")}
 
     elapsed = (entry["finishedAt"] or time.time()) - entry["startedAt"]
     entry["elapsedSeconds"] = int(elapsed)
-    entry["label"] = STAGE_LABELS.get(entry["stage"], "Working…")
+    entry["label"] = MODES[entry["mode"]]["labels"].get(entry["stage"], "Working…")
     # Two readings of the same progress. The bar uses the creeping one so it
     # keeps moving during a long opaque call; the time estimate uses only work
     # that has genuinely finished, because projecting from a deliberately
@@ -171,9 +203,10 @@ def _fraction(entry: dict, creep: bool = True) -> float:
     without ever reaching it — it can overstate how close a stage is to
     finishing, but it can never claim a stage is done when it isn't.
     """
+    mode = MODES[entry["mode"]]
     done = 0.0
-    for stage in STAGE_ORDER:
-        weight = STAGE_WEIGHTS[stage]
+    for stage in mode["order"]:
+        weight = mode["weights"][stage]
         if stage != entry["stage"]:
             done += weight
             continue
@@ -186,7 +219,7 @@ def _fraction(entry: dict, creep: bool = True) -> float:
             # one unit of work represents, approaching but never reaching it.
             unit = weight / max(1, entry["total"])
             in_stage = time.time() - entry.get("stageStartedAt", entry["startedAt"])
-            expected = STAGE_SECONDS.get(stage, 60)
+            expected = mode["seconds"].get(stage, 60)
             within_creep = 1 - 2 ** (-in_stage / max(5, expected))
             done += unit * within_creep
         else:
@@ -196,8 +229,9 @@ def _fraction(entry: dict, creep: bool = True) -> float:
 
 
 def _sweep() -> None:
-    cutoff = time.time() - TTL_SECONDS
+    now = time.time()
     with _lock:
         for key in [k for k, v in _entries.items()
-                    if (v["finishedAt"] or v["startedAt"]) < cutoff]:
+                    if (v["finishedAt"] and v["finishedAt"] < now - TTL_SECONDS)
+                    or v["startedAt"] < now - RUNNING_TTL_SECONDS]:
             _entries.pop(key, None)
