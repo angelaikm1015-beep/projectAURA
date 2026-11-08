@@ -418,8 +418,14 @@ check("  a transposed section changes key and returns home",
       "[K:C]" in written_parts["P2"]["abc"] and "[K:G]" in written_parts["P2"]["abc"],
       written_parts["P2"]["abc"])
 check("  the section's dynamic is marked in derived parts too",
-      "!ff!" in written_parts["P3"]["abc"] and "!pp!" in written_parts["P3"]["abc"],
+      "!f!" in written_parts["P3"]["abc"] and "!pp!" in written_parts["P3"]["abc"],
       written_parts["P3"]["abc"])
+check("  the tune sounds over the accompaniment: lead ff, the others a step below",
+      "!ff!" in written_parts["P2"]["abc"].split("||")[2]
+      and "!ff!" not in written_parts["P3"]["abc"], written_parts["P2"]["abc"])
+check("  the soloist is marked solo, and the accompaniment two steps under it",
+      '"^solo"' in written_parts["P4"]["abc"].split("||")[1]
+      and "!mp!" not in written_parts["P3"]["abc"].split("||")[1], written_parts["P4"]["abc"])
 check("  a solo thins the ensemble: the doubling players rest under it",
       written_parts["P3"]["abc"].split("||")[1].strip().startswith("[K:C] z8"),
       written_parts["P3"]["abc"])
@@ -844,6 +850,29 @@ check("deep: an orchestral piano's dynamics are softened", "!mf!" not in piano a
 check("deep: harmony and sections cover the piece",
       len(deep_score["harmony"]) == 40 and deep_score["sections"][2]["fromMeasure"] == 37,
       deep_score["sections"])
+
+# A melody that keeps replaying the same bars goes back to be varied; held
+# notes and rests may recur freely.
+tune = {0: {"abc": "!p! cdef | gfed | c8 |"}, 1: {"abc": "cdef | gfed | e8 |"},
+        2: {"abc": "!f! cdef | gfed | abag | c8 |"}}
+check("deep: bars heard a third time are sent back to be varied",
+      deep._repeats(tune, 2) and not deep._repeats(tune, 1), deep._repeats(tune, 2))
+check("  a fresh section is left alone",
+      not deep._repeats({**tune, 2: {"abc": "efga | bagf | e8 |"}}, 2))
+
+# Balance: the tune above, the accompaniment a step under it, two under a solo.
+BAL_SECTIONS = [{"start": 1, "end": 2, "bars": 2, "dynamic": "f", "lead": "P1", "texture": "tutti"},
+                {"start": 3, "end": 4, "bars": 2, "dynamic": "mf", "lead": "P2", "texture": "solo"},
+                {"start": 5, "end": 5, "bars": 1, "dynamic": "ff", "lead": None, "texture": "tutti"}]
+line = "!ff! C2 E2 | G4 | z4 | !f!c4 | C4 |]"
+check("deep: accompaniment is capped a step below the lead",
+      form_mod.balance_line(line, "P3", BAL_SECTIONS)
+      == "!mf! C2 E2 | G4 | z4 | !p!c4 | !ff!C4 |]",
+      form_mod.balance_line(line, "P3", BAL_SECTIONS))
+check("  the soloist is marked solo and keeps its level",
+      form_mod.balance_line("C4 | E4 | z4 | c4 | C4 |]", "P2", BAL_SECTIONS)
+      == '!mf!C4 | E4 | z4 | "^solo"c4 | !ff!C4 |]',
+      form_mod.balance_line("C4 | E4 | z4 | c4 | C4 |]", "P2", BAL_SECTIONS))
 
 # Through the API: 202 at once, then progress, then the result — only for its owner.
 deep_calls.clear()

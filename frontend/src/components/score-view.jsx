@@ -250,6 +250,10 @@ function usePlayer(tune, abc, parts) {
     const context = contextRef.current;
     await context.resume();
 
+    // abcjs otherwise stresses every downbeat by its own rule, which turns a
+    // marked pp into a pulse of louder and softer notes; the score's dynamics
+    // (and its accents) are the only thing that should change the level.
+    tune.formatting.midi = { ...(tune.formatting.midi || {}), nobeataccents: true };
     const sequence = tune.setUpAudio();
     const meter = tune.getMeterFraction();
     const meterSize = meter?.den ? meter.num / meter.den : 1;

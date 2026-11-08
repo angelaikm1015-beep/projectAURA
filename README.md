@@ -280,6 +280,19 @@ seconds).
   dynamics print two steps below the ensemble's, light mode voices them as if
   the section were quieter, deep mode tells the model so, and playback mixes
   them lower.
+* **The tune over the accompaniment.** `balance_parts` runs on every finished
+  score. Where a section has a lead, every other player is capped a step below
+  the section's dynamic, or two steps under a `solo`. The soloist's first note
+  is marked *solo*. A tutti with no lead plays together at the section's level.
+  Every player's entry in a section carries a dynamic.
+* **Solos.** Both planners give at least one player a solo section (two or more
+  at higher-intermediate and pro in deep mode), with the rest resting or
+  accompanying very lightly.
+* **Repetition.** Light mode writes three to five phrases, roughly 40% of the
+  piece's bars, so each is heard fewer times. Deep mode shows the model the
+  whole melody so far. Its review sends back any melody section whose bars are
+  heard a third time note for note (`_repeats`), and keeps the text if the model
+  can't vary it without breaking something else.
 
 ### Playback
 
@@ -288,6 +301,11 @@ of real instruments rather than a General MIDI soundfont. abcjs still reads the
 ABC into notes, with pitch, timing and dynamics. Each note is then played from
 the nearest recording, retuned, through a concert-hall reverb, with each
 transposing part played at concert pitch.
+
+Dynamics are read as levels in decibels, about 26 dB from pp to ff, and soft
+notes are also played darker through a low-pass filter. abcjs's automatic beat
+accents are turned off (`nobeataccents`), so only the score's markings change
+the level. The master bus uses only a limiter, so quiet passages aren't lifted.
 
 | Source | Licence | Used for |
 | --- | --- | --- |

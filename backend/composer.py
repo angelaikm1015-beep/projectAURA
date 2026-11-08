@@ -581,7 +581,7 @@ PLAN_SCHEMA = _obj({
                                   "as a label on the score."},
     "phrases": {"type": "array", "items": PHRASE_SCHEMA,
                 "description": "The distinct musical ideas, each planned ONCE: its chord "
-                               "per bar and its character. Two to four of them."},
+                               "per bar and its character. Three to five of them."},
     "form": {"type": "array", "items": FORM_ENTRY_SCHEMA,
              "description": "The piece, section by section, in order. Measures are "
                             "numbered by adding up the sections' bars."},
@@ -1058,10 +1058,10 @@ def revise(score: dict, request: dict, instruction: str) -> dict:
 # — so it was capped at 16 to 32 bars. Now a long piece costs about what a short
 # one did, and the model's attention goes on the bars that are actually new.
 LENGTHS = {
-    "beginner": ("48 to 72", "16 to 24"),
-    "intermediate": ("64 to 100", "24 to 32"),
-    "higher-intermediate": ("96 to 128", "28 to 36"),
-    "pro": ("100 to 150", "32 to 40"),
+    "beginner": ("48 to 72", "20 to 28"),
+    "intermediate": ("64 to 100", "28 to 40"),
+    "higher-intermediate": ("96 to 128", "40 to 52"),
+    "pro": ("100 to 150", "48 to 64"),
 }
 
 KEY_AREAS = {
@@ -1106,7 +1106,7 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "  time it comes back. Repeating a phrase, moving it to a new key, handing",
         "  its melody to another instrument, thinning the texture, and marking the",
         "  dynamics in every part are all done for you, exactly, from the form.",
-        f"  Write two to four phrases totalling {unique} bars; the form should come",
+        f"  Write three to five phrases totalling {unique} bars; the form should come",
         f"  to {total} measures. Spend your effort on making those bars excellent —",
         "  they are heard several times each.",
         "",
@@ -1139,7 +1139,9 @@ def _plan_prompt(request: dict, roster: list) -> str:
         + KEY_AREAS[level],
         "  * A phrase must never come back unchanged. Each return changes at least",
         "    two of: who leads, the texture, the dynamic, the key. The second A",
-        "    should feel like an arrival, not a copy.",
+        "    should feel like an arrival, not a copy. No phrase is heard more than",
+        "    three times in the whole piece; use fragments, sequences and the",
+        "    other phrases to fill the form rather than replaying A.",
         "  * lead is the partId carrying the tune in that section; they play the",
         "    soprano line in their own register. Pass it between instruments and",
         "    families — a melody that sits in one instrument throughout is the",
@@ -1933,6 +1935,7 @@ def compose(request: dict, report=None) -> dict:
 
     units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
     parts = form.realise(plan, roster, plan["_sections"], plan["_phrases"], units, written)
+    form.balance_parts(parts, roster, plan["_sections"])
     form.finish_parts(parts, roster, units)
 
     score = {

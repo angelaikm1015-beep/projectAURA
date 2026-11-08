@@ -245,15 +245,48 @@ function hall(context) {
   reverb.buffer = hallImpulse(context);
   dry.gain.value = 0.82;
   wet.gain.value = 0.32;
-  compressor.threshold.value = -16;
-  compressor.knee.value = 12;
-  compressor.ratio.value = 3;
-  compressor.attack.value = 0.01;
-  compressor.release.value = 0.25;
+  // Only a safety limiter for the loudest tuttis: a compressor working all
+  // the time would lift the quiet passages and flatten the dynamics.
+  compressor.threshold.value = -6;
+  compressor.knee.value = 4;
+  compressor.ratio.value = 12;
+  compressor.attack.value = 0.003;
+  compressor.release.value = 0.3;
   input.connect(dry).connect(compressor);
   input.connect(reverb).connect(wet).connect(compressor);
   compressor.connect(master).connect(context.destination);
   return { input, master };
+}
+
+/* ---------- dynamics ---------- */
+
+// abcjs reports each dynamic as a MIDI velocity (pp 35 … ff 110, with the
+// score's beat accents turned off — see score-view). A real orchestra spans
+// about 30 dB from pp to ff, so velocity is read as a level in decibels rather
+// than as a gain, and a soft note is also darker: players don't just play
+// quieter, they play with less edge. Hairpins land between the steps.
+const LOUDNESS = [   // [velocity, dB, brightness cut-off in Hz]
+  [0, -46, 900],
+  [20, -36, 1400],   // ppp
+  [35, -29, 2200],   // pp
+  [50, -23, 3200],   // p
+  [65, -17, 4800],   // mp
+  [80, -12, 7000],   // mf
+  [95, -7, 10500],   // f
+  [110, -3, 15000],  // ff
+  [127, 0, 18000],
+];
+
+export function loudness(velocity) {
+  const v = Math.max(0, Math.min(127, velocity));
+  const upper = LOUDNESS.findIndex(([at]) => at >= v);
+  const [v0, db0, hz0] = LOUDNESS[Math.max(0, upper - 1)];
+  const [v1, db1, hz1] = LOUDNESS[upper];
+  const t = v1 === v0 ? 0 : (v - v0) / (v1 - v0);
+  return {
+    gain: Math.pow(10, (db0 + (db1 - db0) * t) / 20),
+    brightness: hz0 * Math.pow(hz1 / hz0, t),
+  };
 }
 
 /* ---------- the ending ---------- */
@@ -315,9 +348,7 @@ export function notesFrom(sequence, voices, timing, meterSize, ensembleSize) {
       const start = timing.toSeconds(startBar);
       let end = timing.toSeconds(endBar);
       if (startBar >= timing.finalBar - 1e-6) end = start + (end - start) * FERMATA;
-      // Dynamics arrive as MIDI velocity; loudness follows it on a curve, so
-      // pp is genuinely quiet rather than a slightly softer mf.
-      const velocity = Math.max(0, Math.min(127, event.volume ?? 90)) / 127;
+      const { gain, brightness } = loudness(event.volume ?? 80);
       notes.push({
         voice: index,
         instrument: voice.instrument,
@@ -326,7 +357,8 @@ export function notesFrom(sequence, voices, timing, meterSize, ensembleSize) {
         hit: spec.hits ? (event.pitch === pitches[0] ? "low" : "high") : null,
         start,
         end: Math.max(end, start + 0.05),
-        gain: level * velocity * velocity,
+        gain: level * gain,
+        brightness,
         pan: spec.pan ?? 0,
       });
     }
@@ -352,7 +384,7 @@ export async function perform(context, notes, offset = 0) {
   const { input, master } = hall(context);
   // Many players at once sum loud; scale the ensemble so tutti fits.
   const voices = new Set(notes.map((n) => n.voice)).size || 1;
-  master.gain.value = 0.9 / Math.sqrt(Math.max(1, voices / 2));
+  master.gain.value = 1.6 / Math.sqrt(Math.max(1, voices / 2));
   const panners = new Map();
   const panner = (pan) => {
     if (!panners.has(pan)) {
@@ -403,7 +435,15 @@ export async function perform(context, notes, offset = 0) {
       // when the note ends.
       gain.gain.setValueAtTime(peak, until);
       gain.gain.setTargetAtTime(0, until, release / 3);
-      source.connect(gain).connect(panner(note.pan));
+      if (note.brightness && note.brightness < 17000) {
+        const tone = context.createBiquadFilter();
+        tone.type = "lowpass";
+        tone.frequency.value = note.brightness;
+        tone.Q.value = 0.5;
+        source.connect(tone).connect(gain).connect(panner(note.pan));
+      } else {
+        source.connect(gain).connect(panner(note.pan));
+      }
       source.start(at);
       source.stop(until + release * 2 + 0.1);
       playing.add(source);
@@ -441,7 +481,7 @@ export async function previewNotes(context, instrument, pitches, secondsPerNote)
     hit: spec.hits ? (pitch === Math.min(...pitches) ? "low" : "high") : null,
     start: i * secondsPerNote,
     end: (i + 1) * secondsPerNote * (i === pitches.length - 1 ? 2 : 0.95),
-    gain: (spec.balance ?? 1) * 0.6,
+    gain: (spec.balance ?? 1) * 0.35,
     pan: 0,
   }));
   await prepare(context, notes);

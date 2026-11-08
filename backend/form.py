@@ -1524,3 +1524,121 @@ def finish_parts(parts: list, roster: list, units: Fraction) -> None:
         if part and accompanies(part, roster):
             written["abc"] = soften_marks(written["abc"])
             written["abcLower"] = soften_marks(written.get("abcLower"))
+
+
+# ---------------------------------------------------------------------------
+# Balance: the tune over the accompaniment
+# ---------------------------------------------------------------------------
+
+# An orchestra is balanced by its dynamics: where one player carries the tune,
+# everyone else is marked a step below so the line sounds through; under a solo,
+# two steps. Where nobody leads — a tutti, a chorale — everyone plays the
+# section's level together. Accompanying keyboards are lowered separately
+# (soften_marks), so they are left alone here.
+SOLO_MARK = '"^solo"'
+LEVELS = ("pp", "p", "mp", "mf", "f", "ff")
+_LEVEL_OF = {"pppp": 0, "ppp": 0, **{level: i for i, level in enumerate(LEVELS)},
+             "fff": 5, "ffff": 5}
+
+
+def quieter(level: str, steps: int) -> str:
+    return LEVELS[max(0, _LEVEL_OF.get(level, 3) - steps)]
+
+
+def _first_sounding(bar: str):
+    """Index of the first note or chord in the bar (not a rest), or None."""
+    i, n = 0, len(bar)
+    while i < n:
+        ch = bar[i]
+        if ch in "!\"":
+            j = bar.find(ch, i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "{":
+            j = bar.find("}", i)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "[" and abc_check.INLINE_FIELD_RE.match(bar, i):
+            j = bar.find("]", i)
+            i = n if j < 0 else j + 1
+            continue
+        match = TOKEN_START_RE.match(bar, i)
+        if match:
+            if match.group(0)[-1] not in "zx":
+                return i
+            i = match.end()
+            continue
+        i += 1
+    return None
+
+
+def section_level(section: dict, part_id: str) -> tuple:
+    """(level, cap) for one player in one section: what to mark, and the most allowed."""
+    lead = section.get("lead")
+    if not lead or lead == part_id:
+        return section["dynamic"], None
+    steps = 2 if section.get("texture") == "solo" else 1
+    level = quieter(section["dynamic"], steps)
+    return level, level
+
+
+def balance_line(text: str, part_id: str, sections: list, solo_mark: bool = True) -> str:
+    """One staff balanced section by section. See the note above LEVELS."""
+    if not text:
+        return text
+    spans = _bar_spans(text)
+    if len(spans) != sum(s["bars"] for s in sections):
+        return text
+    bars = [text[a:b] for a, b in spans]
+    current = None
+    for s in sections:
+        level, cap = section_level(s, part_id)
+        first = None
+        for index in range(s["start"] - 1, s["end"]):
+            bar = bars[index]
+            if cap:
+                bar = DYNAMIC_MARK_RE.sub(
+                    lambda m: f"!{cap}!" if _LEVEL_OF.get(m.group(1), -1) > _LEVEL_OF[cap]
+                    else m.group(0), bar)
+            at = _first_sounding(bar)
+            if first is None and at is not None:
+                first = index
+                # A level written anywhere in the entry bar is the writer's choice.
+                marked = DYNAMIC_MARK_RE.search(bar)
+                add = ""
+                if not marked and level != current:
+                    add += f"!{level}!"
+                if solo_mark and s.get("texture") == "solo" and s.get("lead") == part_id \
+                        and "solo" not in bar:
+                    add = SOLO_MARK + add
+                if add:
+                    while at > 0 and bar[at - 1] in "^_=":
+                        at -= 1
+                    bar = bar[:at] + add + bar[at:]
+            marks = [m for m in DYNAMIC_MARK_RE.findall(bar) if m in _LEVEL_OF]
+            if marks:
+                current = marks[-1]
+            bars[index] = bar
+    out, last = [], 0
+    for (a, b), bar in zip(spans, bars):
+        out.append(text[last:a])
+        out.append(bar)
+        last = b
+    out.append(text[last:])
+    return "".join(out)
+
+
+def balance_parts(parts: list, roster: list, sections: list) -> None:
+    """Every staff balanced in place: the tune above, accompaniment beneath it.
+
+    ``sections``: [{start, end, bars, dynamic, lead, texture}] in measure order.
+    """
+    by_id = {part["partId"]: part for part in roster}
+    for written in parts:
+        part = by_id.get(written["partId"])
+        if not part or accompanies(part, roster):
+            continue
+        written["abc"] = balance_line(written.get("abc"), part["partId"], sections)
+        if written.get("abcLower"):
+            written["abcLower"] = balance_line(written["abcLower"], part["partId"], sections,
+                                               solo_mark=False)
