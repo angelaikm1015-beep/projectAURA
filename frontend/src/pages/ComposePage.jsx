@@ -76,9 +76,9 @@ const MODE_CHOICES = [
     value: "deep",
     label: "Deep composing",
     description:
-      "GPT composes every note of every part, passage by passage, then checks and " +
-      "corrects it. Much richer, but it can take a long time — often 20–60 minutes " +
-      "for a full ensemble.",
+      "GPT composes the melody of the whole piece first, then writes every part one " +
+      "by one against it, and checks and corrects each. Much richer, but it takes a " +
+      "long time — often 30–90 minutes for a full ensemble.",
   },
 ];
 
@@ -469,9 +469,9 @@ export default function ComposePage() {
             <strong>{Math.max(1, Math.round(estimate.lowSeconds / 60))}–
             {Math.round(estimate.highSeconds / 60)} minutes</strong>
             {values.mode === "deep"
-              ? " — GPT composes every passage of every part, and then checks and " +
-                "corrects it. It's saved to your library when it's done, even if you " +
-                "close this page."
+              ? " — GPT composes the melody first, then each part one by one against " +
+                "it, checking and correcting as it goes. It's saved to your library when " +
+                "it's done, even if you close this page."
               : " — every bar of every part is written, then checked and corrected " +
                 "before you see it."}
           </p>

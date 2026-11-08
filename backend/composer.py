@@ -509,16 +509,18 @@ PHRASE_SCHEMA = _obj({
     "id": {"type": "string", "description": "Short name the form refers to: 'A', 'B', "
                                             "'C', 'Coda'."},
     "chords": {"type": "array", "items": {"type": "string"},
-               "description": "Concert-pitch chord for EACH bar of the phrase, in order: "
-                              "'G', 'D7/F#', 'Em', 'Cmaj7'. Its length is the phrase's "
-                              "bar count."},
+               "description": "Concert-pitch harmony for EACH bar of the phrase, in order: "
+                              "one chord ('G', 'D7/F#') or two sharing the bar, separated "
+                              "by a space ('Em7 A7'). Repeat a chord in consecutive bars "
+                              "to hold it. Its length is the phrase's bar count."},
     "character": {"type": "string",
                   "description": "One sentence: the melody's shape and rhythm and how it "
                                  "ends (half cadence, full cadence)."},
 })
 
 CHORALE_SCHEMA = _obj({
-    "soprano": {"type": "string", "description": "ABC, concert pitch, exactly one bar per chord."},
+    "soprano": {"type": "string", "description": "ABC, concert pitch, exactly one bar per "
+                                                 "entry of the chord list."},
     "alto": {"type": "string", "description": "ABC, concert pitch, same bar count."},
     "tenor": {"type": "string", "description": "ABC, concert pitch, same bar count."},
     "bass": {"type": "string", "description": "ABC, concert pitch, same bar count."},
@@ -1074,6 +1076,21 @@ KEY_AREAS = {
 }
 
 
+HARMONIC_RHYTHM = [
+    "HARMONIC RHYTHM — how often the chord changes. A new chord on every",
+    "barline, all the way through, is what makes a piece sound robotic. Vary it",
+    "the way composed music does:",
+    "  * let a chord last two bars where the music settles or a melody unfolds",
+    "    over it (write the same chord in both bars);",
+    "  * put TWO chords in a bar where the music gathers pace, separated by a",
+    "    space: 'Am7 D7' (they share the bar, split on the beat);",
+    "  * change faster approaching every cadence, and fastest at the very end;",
+    "  * the piece closes with a perfect cadence: the second-to-last bar ends on",
+    "    the dominant seventh (e.g. 'Dm7 G7' in C major) and the last bar is the",
+    "    home tonic alone, held as a long final chord.",
+]
+
+
 def _plan_prompt(request: dict, roster: list) -> str:
     """Ask for the piece itself — its ideas and its form, not the staves."""
     level = request["level"]
@@ -1111,6 +1128,8 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "what makes a piece sound generated. Use inversions, at least one",
         "secondary dominant, a suspension or two that resolve. Each chord should",
         "sound like it was going to follow the one before it.",
+        "",
+        *HARMONIC_RHYTHM,
         "",
         "THE FORM — the piece, section by section, in order.",
         "  * A section plays one phrase, or a fragment of it (fromBar/toBar): a",
@@ -1200,7 +1219,8 @@ def _chorale_prompt(outline: dict, request: dict, phrase: dict) -> str:
         f"PLAYING LEVEL: {level['label']}.",
         *[f"  {line}" for line in LEVEL_DEMANDS[request["level"]]],
         "",
-        f"WRITE PHRASE {pid} NOW — {len(chords)} bars, one chord per bar, binding:",
+        f"WRITE PHRASE {pid} NOW — {len(chords)} bars; the harmony of each bar is "
+        "binding (two chords in a bar split it on the beat):",
         "  " + " | ".join(chords),
         f"  Its character: {phrase.get('character', '')}",
         ("  This is phrase A: its soprano IS the main theme of the piece — a tune "
@@ -1338,6 +1358,7 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
     if not request["conductor"]:
         plan["conductor"] = None
     _tidy_labels(plan)
+    _close_light(plan)
 
     # The chorales, one phrase per call, and the words for the players — all
     # at once.
@@ -1382,6 +1403,34 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
     plan["_phrases"], plan["_sections"] = phrases, sections
     _tidy_conductor(plan)
     return plan
+
+
+def _close_light(plan: dict) -> None:
+    """End the piece on V7 – I, whatever the outline said.
+
+    The last section of the form plays some phrase, which is usually heard
+    earlier too, where it must not turn into an ending. So the last section
+    gets its own copy of that phrase with its final bars made into the
+    cadence; the copy's chorale is written alongside the others, so every voice
+    is composed toward the close.
+    """
+    phrases = {p.get("id"): p for p in plan.get("phrases") or [] if p.get("chords")}
+    last = next((entry for entry in reversed(plan.get("form") or [])
+                 if entry.get("phrase") in phrases), None)
+    if last is None:
+        return
+    phrase = phrases[last["phrase"]]
+    chords = list(phrase["chords"])
+    end = min(len(chords), int(last.get("toBar") or len(chords)))
+    start = max(end - 2, int(last.get("fromBar") or 1) - 1, 0)
+    chords[start:end] = form.close_on_cadence(chords[start:end], plan["concertKey"])
+    ending = {**phrase, "id": f"{phrase['id']}-end", "chords": chords,
+              "character": (phrase.get("character") or "") + " This statement closes the "
+                           "piece: a perfect cadence, V7 to I, the last bar one long held "
+                           "tonic chord in every voice."}
+    plan["phrases"].append(ending)
+    last["phrase"] = ending["id"]
+    last["transpose"] = 0
 
 
 METER_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\b")
@@ -1884,6 +1933,7 @@ def compose(request: dict, report=None) -> dict:
 
     units = abc_check.units_per_bar(plan["timeSignature"], UNIT_NOTE_LENGTH)
     parts = form.realise(plan, roster, plan["_sections"], plan["_phrases"], units, written)
+    form.finish_parts(parts, roster, units)
 
     score = {
         **{key: plan.get(key) for key in ("title", "tempoText", "tempoBpm", "beatUnit",

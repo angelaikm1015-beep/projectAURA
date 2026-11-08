@@ -237,18 +237,25 @@ The compose page offers two modes.
   model writes a chord grid and a few short four-voice phrases, and
   [form.py](backend/form.py) expands them across the ensemble and the form. It
   finishes in a few minutes, but most of each part is arranged by rule.
-* **Deep** ([backend/deep.py](backend/deep.py)) has the model compose every note.
-  One call with high reasoning effort sets out the themes, the form, a chord for
-  every bar, and each section's key, material and orchestration. Then every
-  passage of up to 16 bars is composed for the whole ensemble, about six staves
-  per call. The melody goes first, and each later group is shown what has
-  already been written for those bars. Python counts every bar and checks range
-  and held notes against the chords, then sends the defects back to the model
-  for up to two correction rounds. Only after that does it trim or pad a bar so
-  the staves line up.
+* **Deep** ([backend/deep.py](backend/deep.py)) has the model compose every note,
+  in the order a composer works:
+  1. **Architecture.** One call with high reasoning effort sets out the themes,
+     the form, the harmony of every bar, and each section's key, material and
+     orchestration.
+  2. **Melody.** The model writes the melody of the whole piece, section by
+     section in order, each call seeing the melody so far.
+  3. **Parts.** The model writes each part on its own: the bass first, then the
+     players who carry the tune, then the inner and accompanying parts, with
+     percussion last. Each part is written against the melody and against every
+     part already written. Passages of up to 32 bars run side by side, but within
+     a passage the players go strictly in turn.
 
-Deep mode takes roughly 10–60 minutes depending on ensemble size and level. That
-is longer than a proxy or browser will hold a request open, so `POST
+  Python counts every bar and checks range, held notes against the chords and
+  the closing bar. It sends the defects back to the model for up to two
+  correction rounds, and only then trims or pads a bar so the staves line up.
+
+Deep mode takes roughly 20–110 minutes depending on ensemble size and level.
+That is longer than a proxy or browser will hold a request open, so `POST
 /api/compose` with `"mode": "deep"` answers `202` immediately and runs the piece
 in a background thread. The page polls `/api/compose/progress/<id>` and collects
 the piece from `/api/compose/result/<id>`. It is saved to the library either
@@ -256,6 +263,45 @@ way, so closing the tab loses nothing. Tune it with `DEEP_PLAN_EFFORT` (default
 `high`), `DEEP_WRITE_EFFORT` (`medium`), `DEEP_REPAIR_EFFORT` (`medium`),
 `DEEP_CONCURRENCY` (`6` passages at once) and `DEEP_CALL_TIMEOUT` (`900`
 seconds).
+
+### Harmony, endings and balance (both modes)
+
+* **Harmonic rhythm.** A bar of the chord grid holds one chord, or two separated
+  by a space (`"Dm7 G7"`), split on the beat. The prompts ask for chords held
+  over two bars where the music settles, and for faster changes into cadences.
+  [form.py](backend/form.py)'s `chord_spans` / `chord_pcs_at` is how every
+  harmony check reads it.
+* **Endings.** Every piece closes on a perfect cadence: the second-to-last bar
+  ends on V7 and the last bar is the tonic, in the home key (`close_on_cadence`).
+  In light mode the closing section gets its own copy of its phrase, so earlier
+  hearings of that phrase keep their harmony. `finish_parts` marks *rit.* over
+  the last two bars and holds the final chord under a fermata in every staff.
+* **Keyboards inside an orchestra** (three or more parts) stay soft. Their
+  dynamics print two steps below the ensemble's, light mode voices them as if
+  the section were quieter, deep mode tells the model so, and playback mixes
+  them lower.
+
+### Playback
+
+[orchestra.js](frontend/src/lib/orchestra.js) plays every note from recordings
+of real instruments rather than a General MIDI soundfont. abcjs still reads the
+ABC into notes, with pitch, timing and dynamics. Each note is then played from
+the nearest recording, retuned, through a concert-hall reverb, with each
+transposing part played at concert pitch.
+
+| Source | Licence | Used for |
+| --- | --- | --- |
+| [tonejs-instruments](https://github.com/nbrosowsky/tonejs-instruments) (mostly Philharmonia Orchestra samples) | CC BY 3.0 | violin, cello, bass, harp, guitars, flute, clarinet, bassoon, saxes, brass, xylophone, piano, organ, harmonium |
+| [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE) | CC0 | viola section, oboe, English horn, piccolo, timpani, marimba, drums |
+| MusyngKite (General MIDI) | — | vibraphone, harpsichord, synthesizer, voices (no free real recording found) |
+
+The sources were recorded tens of decibels apart. Each instrument carries a
+trim, measured from its samples, that brings it to a common level. VSCO names
+notes an octave low (its "C4" sounds C5, measured), and its timpani hits are
+named by drum, so their pitches were measured by autocorrelation. Playback
+slows over the last two bars and holds the final chord, matching the *rit.* and
+fermata in the score. Only the recordings a piece uses are downloaded, on its
+first play.
 
 ### What makes the parts playable
 

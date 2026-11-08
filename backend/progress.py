@@ -55,18 +55,19 @@ STAGE_LABELS = {
     "failed": "Stopped",
 }
 
-# Deep composing (deep.py) is one long architecture call and then almost
-# entirely passage writing; checking and correcting happen inside each passage.
+# Deep composing (deep.py) is one long architecture call, the melody, and then
+# the parts one at a time; checking and correcting happen inside each step.
 MODES = {
     "light": {"order": STAGE_ORDER, "weights": STAGE_WEIGHTS, "seconds": STAGE_SECONDS,
               "labels": STAGE_LABELS},
     "deep": {
-        "order": ["planning", "writing", "engraving"],
-        "weights": {"planning": 0.1, "writing": 0.87, "engraving": 0.03},
-        "seconds": {"planning": 240, "writing": 300, "engraving": 2},
+        "order": ["planning", "melody", "writing", "engraving"],
+        "weights": {"planning": 0.06, "melody": 0.12, "writing": 0.79, "engraving": 0.03},
+        "seconds": {"planning": 240, "melody": 150, "writing": 150, "engraving": 2},
         "labels": {**STAGE_LABELS,
                    "planning": "Composing the themes, the form and every bar's harmony",
-                   "writing": "Composing every part, passage by passage, and checking it"},
+                   "melody": "Composing the melody of the whole piece",
+                   "writing": "Composing the parts one by one against the melody"},
     },
 }
 

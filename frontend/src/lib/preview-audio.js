@@ -5,16 +5,15 @@
  * names doesn't help you make it. This plays a short phrase in the instrument's
  * own voice, in the register it actually sits in, so the roster is built by ear.
  *
- * It is the same machinery the finished score plays through — abcjs builds a
- * tiny tune, the soundfont supplies the timbre — so what you hear here is what
- * the piece will sound like.
+ * It is the same orchestra the finished score plays through (lib/orchestra.js)
+ * — the same recordings, the same hall — so what you hear here is what the
+ * piece will sound like.
  */
 
-import abcjs from "abcjs";
-
-import { SOUNDFONT_URL } from "./soundfont";
+import { previewNotes } from "./orchestra";
 
 const LETTERS = ["C", "D", "E", "F", "G", "A", "B"];
+const SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 
 /** "F#4" / "Bb2" / "G3" -> { letter, accidental, octave }, or null. */
 function parsePitch(text) {
@@ -25,13 +24,6 @@ function parsePitch(text) {
     accidental: match[2],
     octave: Number(match[3]),
   };
-}
-
-/** Scientific pitch -> ABC, where middle C (C4) is "C" and C5 is "c". */
-function toAbc({ letter, accidental, octave }) {
-  const mark = accidental === "#" ? "^" : accidental === "b" ? "_" : "";
-  if (octave >= 5) return mark + letter.toLowerCase() + "'".repeat(octave - 5);
-  return mark + letter + ",".repeat(Math.max(0, 4 - octave));
 }
 
 /** Step up the C-major letters from a starting pitch. */
@@ -46,6 +38,8 @@ function step(pitch, steps) {
   };
 }
 
+const midiOf = ({ letter, octave }) => 12 * (octave + 1) + SEMITONES[letter];
+
 /** The bottom of the instrument's comfortable range, e.g. "G3-D5" -> G3. */
 function bottomOf(easy) {
   const low = String(easy || "").split("-")[0];
@@ -54,36 +48,16 @@ function bottomOf(easy) {
 
 /**
  * A short rising arpeggio, one octave, starting a little above the bottom of
- * the range so nothing sounds strained.
+ * the range so nothing sounds strained. Sounding pitch: the range is written,
+ * so the instrument's transposition is added.
  */
 function phraseFor(info) {
   if (info.pitched === false) {
     // Unpitched percussion reads as rhythm, not pitch: two sounds, a simple bar.
-    return { music: "c2 c e c2 c e |", channel: 10 };
+    return [60, 60, 64, 60, 60, 64];
   }
   const root = step(bottomOf(info.easy), 2);
-  const notes = [0, 2, 4, 7, 4, 2, 0]
-    .map((s) => toAbc(step(root, s)));
-  return {
-    music: `${notes.slice(0, 4).map((n) => `${n}2`).join(" ")} | ${notes.slice(4).map((n) => `${n}2`).join(" ")}4 |`,
-    channel: null,
-  };
-}
-
-function abcFor(info) {
-  const { music, channel } = phraseFor(info);
-  return [
-    "X:1",
-    "M:4/4",
-    "L:1/8",
-    "Q:1/4=132",
-    `V:1 clef=${info.pitched === false ? "perc stafflines=1" : info.clef || "treble"}`,
-    "K:C",
-    "V:1",
-    channel ? `%%MIDI channel ${channel}` : null,
-    `%%MIDI program ${info.midi ?? 0}`,
-    music,
-  ].filter(Boolean).join("\n");
+  return [0, 2, 4, 7, 4, 2, 0].map((s) => midiOf(step(root, s)) + (info.transpose || 0));
 }
 
 // One instrument at a time: starting a second preview stops the first, so
@@ -97,12 +71,14 @@ export function stopPreview() {
 }
 
 export function previewSupported() {
-  return typeof abcjs.synth?.supportsAudio === "function" && abcjs.synth.supportsAudio();
+  return typeof window !== "undefined"
+    && Boolean(window.AudioContext || window.webkitAudioContext);
 }
 
 /**
- * Play a short phrase in `info`'s voice. Resolves when the sound starts, not
- * when it ends; rejects if audio is unavailable.
+ * Play a short phrase in `info`'s voice (`info.name` is the instrument).
+ * Resolves when the sound starts, not when it ends; rejects if audio is
+ * unavailable or the recordings can't be fetched.
  */
 export async function previewInstrument(info) {
   stopPreview();
@@ -114,16 +90,8 @@ export async function previewInstrument(info) {
   }
   await audioContext.resume();
 
-  const [tune] = abcjs.renderAbc("*", abcFor(info));
-  const synth = new abcjs.synth.CreateSynth();
-  await synth.init({
-    audioContext,
-    visualObj: tune,
-    // The range is written pitch; this is what the audience actually hears.
-    options: { midiTranspose: info.transpose || 0, soundFontUrl: SOUNDFONT_URL },
-  });
-  await synth.prime();
-  current = synth;
-  synth.start();
-  return synth;
+  // Quarter notes at 132 bpm, as the phrase was always played.
+  const performance = await previewNotes(audioContext, info.name, phraseFor(info), 60 / 132);
+  current = performance;
+  return performance;
 }

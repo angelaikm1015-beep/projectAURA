@@ -537,7 +537,7 @@ _merge_repeats = merge_repeats
 # Chord symbols
 # ---------------------------------------------------------------------------
 
-CHORD_ROOT_RE = re.compile(r"(^|/)([A-G])([#b]?)")
+CHORD_ROOT_RE = re.compile(r"(^|/|\s)([A-G])([#b]?)")
 
 
 def transpose_chord(symbol: str, semitones: int, key: str) -> str:

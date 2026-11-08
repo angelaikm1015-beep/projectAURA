@@ -19,7 +19,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import abcjs from "abcjs";
 
-import { SOUNDFONT_URL } from "../lib/soundfont";
+import { OPTIONS } from "../lib/options-data";
+import { makeTiming, notesFrom, perform, prepare } from "../lib/orchestra";
 
 const slug = (text) =>
   String(text || "score").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -169,59 +170,52 @@ function Sheet({ abc, size, nameEveryLine = true, onTune }) {
 }
 
 /*
- * Which voices belong to which player.
- *
- * abcjs silences parts by voice *index*, so the mixer needs the order the
- * voices are declared in. That order is written into the ABC itself — the V:
- * lines above the first K: — which makes it the one source that is right for
- * every score, including ones saved before the mixer existed. A grand-staff
- * instrument declares two voices (P9a, P9b) and both belong to the one player.
- */
-function voiceIndexesByPart(abc) {
-  const header = String(abc || "").split(/^K:/m)[0];
-  const ids = [...header.matchAll(/^V:\s*(\S+)/gm)].map((match) => match[1]);
-
-  const byPart = {};
-  ids.forEach((id, index) => {
-    const partId = /^(.*?)[ab]?$/.exec(id)[1];
-    (byPart[partId] ||= []).push(index);
-    if (partId !== id) (byPart[id] ||= []).push(index);
-  });
-  return byPart;
-}
-
-/*
  * Playback, and which players are sounding.
  *
- * Muting is applied when the audio is built, not while it runs, so changing the
- * mix mid-piece means rebuilding it: the position is remembered, the parts are
- * re-rendered, and playback resumes where it was. That costs a moment on a long
- * score, which is why the button says so rather than appearing to hang.
+ * abcjs reads the ABC into notes; lib/orchestra.js plays them from recordings
+ * of real instruments, in a hall, with the piece's ending slowed into its
+ * final chord. The first play of a piece downloads the recordings it needs,
+ * which is what "Loading the orchestra…" is waiting for.
+ *
+ * Muting is applied when the notes are scheduled, so changing the mix
+ * mid-piece re-schedules from the same point.
  *
  * The mix lives here rather than in the mixer component so that the buttons and
  * the sound can never disagree — one place decides who is playing.
  */
-function usePlayer(tune, abc) {
-  const synthRef = useRef(null);
+function usePlayer(tune, abc, parts) {
+  const performanceRef = useRef(null);
+  const contextRef = useRef(null);
   // Where the audio is: the AudioContext clock time at which bar 1 would have
-  // started, and how long the whole piece lasts. Position is read from the
-  // audio clock rather than counted by a timer, so it cannot drift from what
-  // is actually sounding.
+  // started, how long the whole piece lasts, and how bars map to seconds once
+  // the ending slows down. Position is read from the audio clock rather than
+  // counted by a timer, so it cannot drift from what is actually sounding.
   const clockRef = useRef(null);
   const [state, setState] = useState("idle"); // idle | loading | playing | error
   const [muted, setMuted] = useState(() => new Set());
   const [elapsed, setElapsed] = useState(0);
-  const supported = typeof abcjs.synth?.supportsAudio === "function" && abcjs.synth.supportsAudio();
+  const supported = typeof window !== "undefined"
+    && Boolean(window.AudioContext || window.webkitAudioContext);
 
-  const voicesByPart = useMemo(() => voiceIndexesByPart(abc), [abc]);
+  // The voices in the order abcjs numbers its tracks, and who plays each.
+  const voiceParts = useMemo(() => {
+    const header = String(abc || "").split(/^K:/m)[0];
+    return [...header.matchAll(/^V:\s*(\S+)/gm)].map((m) => /^(.*?)[ab]?$/.exec(m[1])[1]);
+  }, [abc]);
+  const instrumentOf = useMemo(
+    () => Object.fromEntries((parts || []).map((p) => [p.partId, p.instrument])),
+    [parts],
+  );
+
+  function halt() {
+    performanceRef.current?.stop();
+    performanceRef.current = null;
+  }
 
   // A different tune is a different mix; never let the old one keep playing.
-  useEffect(() => {
-    return () => {
-      synthRef.current?.stop();
-      synthRef.current = null;
-    };
-  }, [tune]);
+  useEffect(() => halt, [tune]);
+
+  useEffect(() => () => { contextRef.current?.close?.(); }, []);
 
   useEffect(() => {
     setState("idle");
@@ -238,8 +232,7 @@ function usePlayer(tune, abc) {
       if (!clock) return;
       const at = clock.context.currentTime - clock.startedAt;
       if (clock.duration && at >= clock.duration) {
-        synthRef.current?.stop();
-        synthRef.current = null;
+        halt();
         clockRef.current = null;
         setElapsed(0);
         setState("idle");
@@ -253,35 +246,41 @@ function usePlayer(tune, abc) {
   async function build(silenced, startAtSec) {
     // The AudioContext has to be created inside the click, or browsers will
     // refuse to start it.
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    await audioContext.resume();
+    contextRef.current ||= new (window.AudioContext || window.webkitAudioContext)();
+    const context = contextRef.current;
+    await context.resume();
 
-    const voicesOff = [...silenced].flatMap((partId) => voicesByPart[partId] || []);
-    const synth = new abcjs.synth.CreateSynth();
-    await synth.init({
-      audioContext,
-      visualObj: tune,
-      options: { voicesOff, soundFontUrl: SOUNDFONT_URL },
+    const sequence = tune.setUpAudio();
+    const meter = tune.getMeterFraction();
+    const meterSize = meter?.den ? meter.num / meter.den : 1;
+    const timing = makeTiming(tune.millisecondsPerMeasure(sequence.tempo) / 1000,
+                              Math.round(sequence.totalDuration / meterSize));
+    const voices = voiceParts.map((partId) => {
+      const instrument = instrumentOf[partId];
+      return {
+        instrument,
+        transpose: OPTIONS.instrumentInfo?.[instrument]?.transpose || 0,
+        muted: silenced.has(partId),
+      };
     });
-    const primed = await synth.prime();
-    synthRef.current = synth;
-    if (startAtSec) synth.seek(startAtSec, "seconds");
-    synth.start();
+    const notes = notesFrom(sequence, voices, timing, meterSize, (parts || []).length);
+    await prepare(context, notes);
+    const performance = await perform(context, notes, startAtSec || 0);
+    performanceRef.current = performance;
     clockRef.current = {
-      context: audioContext,
-      startedAt: audioContext.currentTime - (startAtSec || 0),
-      duration: primed?.duration || 0,
+      context,
+      startedAt: performance.startedAt,
+      duration: performance.duration,
+      timing,
     };
     setElapsed(startAtSec || 0);
   }
 
-  /** Start (or jump) to a point in the piece, in seconds. */
-  async function playFrom(seconds) {
-    synthRef.current?.stop();
-    synthRef.current = null;
+  async function start(silenced, seconds) {
+    halt();
     setState("loading");
     try {
-      await build(muted, seconds);
+      await build(silenced, seconds);
       setState("playing");
     } catch (error) {
       console.warn("Playback failed:", error);
@@ -289,52 +288,40 @@ function usePlayer(tune, abc) {
     }
   }
 
+  /** Start (or jump) to a point in the piece, in seconds. */
+  const playFrom = (seconds) => start(muted, seconds);
+
   async function toggle() {
     if (state === "playing") {
-      synthRef.current?.stop();
-      synthRef.current = null;
+      halt();
       clockRef.current = null;
       setElapsed(0);
       setState("idle");
       return;
     }
-    setState("loading");
-    try {
-      await build(muted, 0);
-      setState("playing");
-    } catch (error) {
-      console.warn("Playback failed:", error);
-      setState("error");
-    }
+    await start(muted, 0);
   }
 
   /** Change who is sounding. Takes effect immediately if it is already playing. */
   async function setMix(next) {
     setMuted(next);
-    if (state !== "playing" || !synthRef.current) return;
-
-    // Keep the place. pause() hands back how far in we are.
-    const at = synthRef.current.pause();
-    setState("loading");
-    try {
-      await build(next, at);
-      setState("playing");
-    } catch (error) {
-      console.warn("Re-mixing failed:", error);
-      setState("error");
-    }
+    const clock = clockRef.current;
+    if (state !== "playing" || !clock) return;
+    // Keep the place.
+    await start(next, Math.max(0, clock.context.currentTime - clock.startedAt));
   }
 
-  // Generated pieces have no repeats or pickups, so the bar is simply the
-  // elapsed time over the length of one bar at the score's tempo.
+  // Bars from the audio clock, through the same timing the notes were placed
+  // with, so the counter slows with the music at the end.
   const msPerMeasure = tune?.millisecondsPerMeasure?.() || 0;
-  const measure = state === "playing" && msPerMeasure
-    ? Math.floor((elapsed * 1000) / msPerMeasure) + 1
+  const timing = clockRef.current?.timing;
+  const measure = state === "playing" && (timing || msPerMeasure)
+    ? Math.floor(timing ? timing.toBars(elapsed) : (elapsed * 1000) / msPerMeasure) + 1
     : 0;
 
   function playFromMeasure(number) {
     if (!msPerMeasure) return;
-    playFrom(((number - 1) * msPerMeasure) / 1000);
+    playFrom(timing ? timing.toSeconds(number - 1) : ((number - 1) * msPerMeasure) / 1000);
   }
 
   return { state, supported, toggle, muted, setMix, measure, playFromMeasure };
@@ -409,7 +396,7 @@ function PlayButton({ player, disabled }) {
       onClick={player.toggle}
       disabled={disabled || player.state === "loading"}
     >
-      {player.state === "loading" ? "Mixing…"
+      {player.state === "loading" ? "Loading the orchestra…"
         : player.state === "playing" ? "■ Stop"
         : player.state === "error" ? "Playback unavailable"
         : "▶ Play"}
@@ -515,7 +502,7 @@ function Mixer({ parts, player }) {
 
       <p className="mixer__hint">
         {player.state === "playing"
-          ? "Changing the mix while it plays takes a moment to re-mix."
+          ? "Changing the mix while it plays picks up from the same place."
           : "Set the mix, then press Play — or change it while it's playing."}
       </p>
     </section>
@@ -846,7 +833,7 @@ export function ScoreView({
   ];
 
   const active = sheets.find((sheet) => sheet.id === activeId) || sheets[0];
-  const player = usePlayer(tune, active.abc);
+  const player = usePlayer(tune, active.abc, score.parts);
   const base = slug(score.title);
   const fileBase = active.id === "full" || active.id === "conductor"
     ? `${base}-full-score`
@@ -1063,6 +1050,12 @@ export function ScoreView({
         <p className="score-footnote">
           The .abc file opens in MuseScore, and MIDI imports into any notation or DAW
           software if you want to edit the piece further.
+        </p>
+        <p className="score-footnote">
+          Playback uses recordings of real instruments: the Philharmonia Orchestra
+          samples via tonejs-instruments (CC BY 3.0), VSCO 2 Community Edition by
+          Versilian Studios (CC0), and MusyngKite for vibraphone, harpsichord,
+          synthesizer and voices.
         </p>
       </main>
     </div>

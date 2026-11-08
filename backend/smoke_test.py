@@ -632,8 +632,12 @@ fake.chat.completions.create.side_effect = outline_answer
 with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
      mock.patch.object(composer, "client", return_value=fake):
     r = client.post("/api/compose", json=COMPOSE, headers=AUTHED)
+# Two phrases, plus the closing section's own copy of its phrase, ending V7 - I.
 check("each phrase's chorale is written in its own call",
-      chorale_names.count("chorale") == 2 and chorale_names[0] == "plan", chorale_names)
+      chorale_names.count("chorale") == 3 and chorale_names[0] == "plan", chorale_names)
+check("  the last section closes on V7 - I without changing the phrase's earlier hearings",
+      [h["chord"] for h in r.json["score"]["harmony"]][:2] == ["G", "D"]
+      and r.json["score"]["harmony"][-1]["chord"] == "G", r.json["score"]["harmony"])
 check("  a failed chorale still delivers the whole piece, every part, every bar",
       r.status_code == 201 and len(r.json["score"]["parts"]) == 5
       and all(abc_check_mod.bar_count(w["abc"]) == FAKE_MEASURES
@@ -730,14 +734,14 @@ check("a rejected API key is explained, not retried into a generic failure",
       r.status_code == 502 and "OPENAI_API_KEY" in r.json["message"], (r.status_code, r.json))
 
 # --- deep composing ------------------------------------------------------
-# The model composes every passage; the fake one writes what each prompt asks
-# for, so the test follows the real call sequence. Its first draft of the oboe
-# in the opening passage has a short bar, which the correction round must fix.
+# The model composes the melody, then every part one at a time; the fake one
+# writes what each prompt asks for, so the test follows the real call sequence.
+# Its first draft of the oboe has a short bar, which a correction must fix.
 import re
 import time
 import deep
 
-for schema_name in ("PLAN_SCHEMA", "PASSAGE_SCHEMA"):
+for schema_name in ("PLAN_SCHEMA", "MELODY_SCHEMA", "PART_SCHEMA"):
     schema_problems = walk_schema(getattr(deep, schema_name))
     check(f"deep.{schema_name} is valid for strict Structured Outputs",
           not schema_problems, schema_problems)
@@ -747,75 +751,98 @@ DEEP_PLAN = {
     "timeSignature": "4/4", "concertKey": "C major",
     "themes": [{"id": "A", "abc": "C2 E2 G2 c2 | c8 |", "description": "Rising."}],
     "sections": [
-        {"label": "A", "bars": 20, "key": "C major", "chords": ["C"] * 20, "dynamic": "p",
-         "lead": "P4", "material": "A", "orchestration": "oboe tune"},
-        {"label": "B", "bars": 4, "key": "C major", "chords": ["C"], "dynamic": "f",
+        {"label": "A", "bars": 20, "key": "C major", "chords": ["C"] * 18 + ["C F", "C"],
+         "dynamic": "p", "lead": "P4", "material": "A", "orchestration": "oboe tune"},
+        {"label": "B", "bars": 16, "key": "G major", "chords": ["C"], "dynamic": "f",
          "lead": None, "material": "A fragments", "orchestration": "tutti"},
+        {"label": "Coda", "bars": 4, "key": "D major", "chords": ["C", "C", "C", "C"],
+         "dynamic": "mf", "lead": None, "material": "close", "orchestration": "tutti"},
     ],
     "partRoles": [{"partId": "P1", "role": "Leads the strings."}],
     "programNote": "A test.", "rehearsalTips": "Count.", "conductor": None,
 }
-deep_calls = []
+deep_calls, deep_prompts = [], []
 
 def deep_answer(**kwargs):
     name = kwargs["response_format"]["json_schema"]["name"]
+    prompt = kwargs["messages"][1]["content"]
     deep_calls.append(name)
+    deep_prompts.append((name, prompt))
     if name == "deep_plan":
         return FakeCompletion(DEEP_PLAN)
-    prompt = kwargs["messages"][1]["content"]
-    if name == "passage_fix":
-        ids = re.findall(r"^\[(P\d+)\]", prompt, re.M)
-        bars = int(re.search(r"EXACTLY (\d+) bars", prompt).group(1))
+    if name.endswith("_fix"):
+        wanted = re.findall(r"^s(\d+) — EXACTLY (\d+) bars", prompt, re.M)
     else:
-        ids = re.findall(r"^  \[(P\d+)\]", prompt.split("COMPOSE THESE PARTS NOW:")[1], re.M)
-        bars = int(re.search(r"EXACTLY (\d+) bars of section", prompt).group(1))
-    parts = []
-    for pid in ids:
-        line = " | ".join(["!mf! C2 E2 G2 c2"] * bars) + " |"
-        if name == "passage" and pid == "P4" and "NOW COMPOSE mm.1-" in prompt:
-            line = "C2 E2 G2 | " + line.split(" | ", 1)[1]
-        parts.append({"partId": pid, "abc": line,
-                      "abcLower": "C,8 |" * bars if pid == "P5" else None,
-                      "performanceNote": "Play."})
-    return FakeCompletion({"parts": parts})
+        asked = prompt.split("COMPOSE THE MELODY NOW" if name == "melody"
+                             else "YOU ARE COMPOSING")[1]
+        wanted = re.findall(r"^SECTION s(\d+) .*?EXACTLY (\d+) bars", asked, re.M)
+    pid = (re.search(r"Use partId (P\d+)", prompt) or [None, None])[1]
+    sections = []
+    for number, bars in wanted:
+        bars = int(bars)
+        line = ["!mf! C2 E2 G2 c2"] * bars
+        if int(number) == 3:
+            line[-1] = "c8"                      # the closing chord, held
+        if name == "part" and pid == "P4" and number == "1":
+            line[0] = "C2 E2 G2"                 # a short bar for the review to catch
+        sections.append({"section": f"s{number}", "abc": " | ".join(line) + " |",
+                         "abcLower": " | ".join(["C,8"] * bars) + " |" if pid == "P5" else None})
+    if name.startswith("melody"):
+        return FakeCompletion({"sections": sections})
+    return FakeCompletion({"partId": pid, "sections": sections, "performanceNote": "Play."})
 
 deep_client = mock.Mock()
 deep_client.chat.completions.create.side_effect = deep_answer
 deep_request = {**COMPOSE, "mode": "deep", "conductor": False}
-deep_prompts = []
-real_prompt = deep._passage_prompt
-with mock.patch.object(composer, "client", return_value=deep_client), \
-     mock.patch.object(deep, "GROUP_STAVES", 4), \
-     mock.patch.object(deep, "_passage_prompt",
-                       side_effect=lambda *a: deep_prompts.append(real_prompt(*a))
-                       or deep_prompts[-1]):
+with mock.patch.object(composer, "client", return_value=deep_client):
     deep_score = deep.compose(deep_request)
 
-check("deep: one architecture call, then passages, then a correction",
-      deep_calls[0] == "deep_plan" and "passage" in deep_calls and "passage_fix" in deep_calls,
-      deep_calls)
-# 20 bars split into two passages of 10, plus one of 4; at 4 staves per group
-# the 5 parts (piano counts twice) need two groups per passage.
-check("deep: long sections are split evenly and groups stay under the staff limit",
-      deep_calls.count("passage") == 6, deep_calls.count("passage"))
-check("deep: the melody is composed first and the next group writes against it",
-      "[P4]" in deep_prompts[0].split("COMPOSE THESE PARTS NOW:")[1]
-      and "[P5]" in deep_prompts[1].split("COMPOSE THESE PARTS NOW:")[1]
-      and "ALREADY COMPOSED FOR THESE BARS" in deep_prompts[1]
-      and "ALREADY COMPOSED" not in deep_prompts[0], len(deep_prompts))
+check("deep: plan, then the melody, then the parts, with a correction",
+      deep_calls[0] == "deep_plan" and deep_calls[1] == "melody"
+      and deep_calls.index("part") > max(i for i, n in enumerate(deep_calls) if n == "melody")
+      and "part_fix" in deep_calls, deep_calls)
+# 20 + 16 bars don't fit one 32-bar passage: two passages, the coda with the B section.
+check("deep: the melody is written passage by passage, in order",
+      deep_calls.count("melody") == 2, deep_calls.count("melody"))
+check("deep: every part is written on its own, once per passage",
+      deep_calls.count("part") == 2 * len(ROSTER), deep_calls.count("part"))
+part_prompts = [p for n, p in deep_prompts if n == "part"]
+first_passage = [p for p in part_prompts if ">> s1 " in p]
+check("deep: the bass is composed first, then the tune's carrier",
+      "YOU ARE COMPOSING [P5]" in first_passage[0] and "YOU ARE COMPOSING [P4]" in first_passage[1],
+      [re.search(r"YOU ARE COMPOSING \[(P\d)\]", p)[1] for p in first_passage])
+check("deep: each part is written against the melody and the parts before it",
+      all("THE MELODY FOR THESE BARS" in p for p in part_prompts)
+      and "PARTS ALREADY COMPOSED" not in first_passage[0]
+      and "[P5] Piano" in first_passage[1].split("PARTS ALREADY COMPOSED")[1])
+check("deep: the lead is handed the melody at its own pitch",
+      "YOU CARRY THE MELODY HERE" in first_passage[1], first_passage[1][-1500:])
+check("deep: an orchestral piano is told to stay soft",
+      "KEYBOARD IS A SOFT COLOUR" in first_passage[0])
 check("deep: every part is the whole piece",
-      all(composer.abc_check.bar_count(p["abc"]) == 24 for p in deep_score["written"]),
+      all(composer.abc_check.bar_count(p["abc"]) == 40 for p in deep_score["written"]),
       [composer.abc_check.bar_count(p["abc"]) for p in deep_score["written"]])
 check("deep: the corrected bar is used, so nothing had to be padded",
       not deep_score["warnings"] and not deep_score["repaired"], deep_score["warnings"])
 check("deep: piano gets its own left hand",
       next(p for p in deep_score["written"] if p["partId"] == "P5")["abcLower"]
       .startswith("C,8"))
-check("deep: double bar where a new section starts",
-      deep_score["written"][0]["abc"].count("||") == 1, deep_score["written"][0]["abc"][:200])
+check("deep: double bar where each new section starts",
+      deep_score["written"][0]["abc"].count("||") == 2, deep_score["written"][0]["abc"][:200])
 check("deep: score says how it was made", deep_score["mode"] == "deep")
+check("deep: two chords may share a bar",
+      any(h["chord"] == "C F" for h in deep_score["harmony"]), deep_score["harmony"][16:20])
+check("deep: the piece closes V7 - I in the home key",
+      [h["chord"] for h in deep_score["harmony"][-2:]] == ["C G7", "C"]
+      and deep_score["written"][0]["abc"].count("[K:") == 2, deep_score["harmony"][-2:])
+violin = deep_score["written"][0]["abc"]
+check("deep: rit. over the last two bars and a held final chord",
+      '"^rit."' in violin and violin.rstrip().endswith("!fermata!c8 |]"), violin[-80:])
+piano = next(p for p in deep_score["written"] if p["partId"] == "P5")["abc"]
+check("deep: an orchestral piano's dynamics are softened", "!mf!" not in piano and "!p!" in piano,
+      piano[:80])
 check("deep: harmony and sections cover the piece",
-      len(deep_score["harmony"]) == 24 and deep_score["sections"][1]["fromMeasure"] == 21,
+      len(deep_score["harmony"]) == 40 and deep_score["sections"][2]["fromMeasure"] == 37,
       deep_score["sections"])
 
 # Through the API: 202 at once, then progress, then the result — only for its owner.

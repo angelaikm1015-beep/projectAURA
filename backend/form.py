@@ -26,6 +26,7 @@ import re
 from fractions import Fraction
 
 import abc_check
+import options
 import orchestrate
 
 VOICES = ("soprano", "alto", "tenor", "bass")
@@ -77,7 +78,7 @@ def read_phrases(plan: dict, units: Fraction) -> dict:
             # phrase: plainer, but complete and in harmony.
             if not chords:
                 continue
-            read = voice_chords(chords, units)
+            read = voice_chords(chords, units, beat_units(plan.get("timeSignature")))
         bars = len(chords) or max(len(v) for v in read.values())
         chords = (chords + [chords[-1] if chords else ""] * bars)[:bars]
 
@@ -100,7 +101,7 @@ def read_phrases(plan: dict, units: Fraction) -> dict:
 VOICE_RANGES = {"soprano": (62, 79), "alto": (55, 74), "tenor": (48, 67), "bass": (38, 57)}
 
 
-def voice_chords(chords: list, units: Fraction) -> dict:
+def voice_chords(chords: list, units: Fraction, beat: Fraction = None) -> dict:
     """A plain four-part chorale from chord symbols alone: {voice: [bar events]}.
 
     The fallback for a phrase the model could not write in time. Bass on the
@@ -112,42 +113,51 @@ def voice_chords(chords: list, units: Fraction) -> dict:
     previous = {"soprano": 72, "alto": 67, "tenor": 60, "bass": 48}
     out = {voice: [] for voice in VOICES}
     for symbol in chords:
-        pcs = chord_pcs(symbol)
-        match = CHORD_RE.match(symbol or "")
-        if not pcs or not match:
-            for voice in VOICES:
-                out[voice].append([(previous[voice], units)])
-            continue
-        root = orchestrate.PITCH_OF_KEY.get(match.group(1) + match.group(2), 0)
-        bass_pc = orchestrate.PITCH_OF_KEY.get((match.group(4) or "") + (match.group(5) or ""),
-                                               root) if match.group(4) else root
-        bass = _nearest_pc_in(previous["bass"], bass_pc, *VOICE_RANGES["bass"])
-
-        wanted = [root, (root + 4) % 12 if (root + 4) % 12 in pcs else (root + 3) % 12,
-                  (root + 7) % 12 if (root + 7) % 12 in pcs else None]
-        wanted = [pc for pc in wanted if pc is not None and pc in pcs]
-        extra = sorted(pcs - set(wanted) - {bass_pc})
-        pool = (wanted + extra + wanted)[:3] if len(wanted) < 3 else wanted[:3]
-        if extra and len(wanted) == 3:
-            pool = [wanted[0] if wanted[0] != bass_pc else wanted[2], wanted[1], extra[0]]
-
-        chosen, used = {}, set()
-        for voice in ("soprano", "alto", "tenor"):
-            low, high = VOICE_RANGES[voice]
-            options = [pc for pc in pool if pc not in used] or pool
-            best = min((_nearest_pc_in(previous[voice], pc, low, high) for pc in options),
-                       key=lambda m: abs(m - previous[voice]))
-            # Keep the voices in order, top to bottom.
-            ceiling = chosen.get("alto" if voice == "tenor" else "soprano")
-            if voice != "soprano" and ceiling is not None and best > ceiling:
-                best -= 12
-            chosen[voice] = best
-            used.add(best % 12)
-        chosen["bass"] = min(bass, chosen["tenor"] - 3) if bass >= chosen["tenor"] else bass
+        bar = {voice: [] for voice in VOICES}
+        for chord, start, end in chord_spans(symbol, units, beat or Fraction(2)):
+            _voice_one(chord, end - start, previous, bar)
         for voice in VOICES:
-            out[voice].append([(chosen[voice], units)])
-            previous[voice] = chosen[voice]
+            out[voice].append(bar[voice])
     return out
+
+
+def _voice_one(symbol: str, length: Fraction, previous: dict, out: dict) -> None:
+    """Voice one chord for ``length`` units onto the end of each voice's bar."""
+    pcs = chord_pcs(symbol)
+    match = CHORD_RE.match(symbol or "")
+    if not pcs or not match:
+        for voice in VOICES:
+            out[voice].append((previous[voice], length))
+        return
+    root = orchestrate.PITCH_OF_KEY.get(match.group(1) + match.group(2), 0)
+    bass_pc = orchestrate.PITCH_OF_KEY.get((match.group(4) or "") + (match.group(5) or ""),
+                                           root) if match.group(4) else root
+    bass = _nearest_pc_in(previous["bass"], bass_pc, *VOICE_RANGES["bass"])
+
+    wanted = [root, (root + 4) % 12 if (root + 4) % 12 in pcs else (root + 3) % 12,
+              (root + 7) % 12 if (root + 7) % 12 in pcs else None]
+    wanted = [pc for pc in wanted if pc is not None and pc in pcs]
+    extra = sorted(pcs - set(wanted) - {bass_pc})
+    pool = (wanted + extra + wanted)[:3] if len(wanted) < 3 else wanted[:3]
+    if extra and len(wanted) == 3:
+        pool = [wanted[0] if wanted[0] != bass_pc else wanted[2], wanted[1], extra[0]]
+
+    chosen, used = {}, set()
+    for voice in ("soprano", "alto", "tenor"):
+        low, high = VOICE_RANGES[voice]
+        options = [pc for pc in pool if pc not in used] or pool
+        best = min((_nearest_pc_in(previous[voice], pc, low, high) for pc in options),
+                   key=lambda m: abs(m - previous[voice]))
+        # Keep the voices in order, top to bottom.
+        ceiling = chosen.get("alto" if voice == "tenor" else "soprano")
+        if voice != "soprano" and ceiling is not None and best > ceiling:
+            best -= 12
+        chosen[voice] = best
+        used.add(best % 12)
+    chosen["bass"] = min(bass, chosen["tenor"] - 3) if bass >= chosen["tenor"] else bass
+    for voice in VOICES:
+        out[voice].append((chosen[voice], length))
+        previous[voice] = chosen[voice]
 
 
 def _nearest_pc_in(near: int, pc: int, low: int, high: int) -> int:
@@ -165,7 +175,14 @@ def chord_pcs(symbol: str):
     Covers what a chord grid actually uses — triads, sevenths, sixths, sus,
     diminished, half-diminished, augmented, added and extended tones. Returns
     None for anything it cannot read, and then that bar is left alone.
+
+    A bar holding two chords ('Dm7 G7') gives both chords' tones; use
+    chord_pcs_at where the beat is known.
     """
+    several = bar_chords(symbol)
+    if len(several) > 1:
+        sets = [chord_pcs(one) for one in several]
+        return set().union(*[pcs for pcs in sets if pcs]) or None
     match = CHORD_RE.match(str(symbol or ""))
     if not match:
         return None
@@ -212,6 +229,45 @@ def chord_pcs(symbol: str):
     return pcs
 
 
+# A bar of the chord grid holds one chord, or two separated by a space —
+# 'Dm7 G7' — which share the bar beat by beat. Harmony that changes at the same
+# rate all the way through is what made the music sound mechanical, so the grid
+# is allowed to hold a chord for two bars, or change twice in one approaching a
+# cadence.
+MAX_CHORDS_PER_BAR = 2
+
+
+def bar_chords(symbol) -> list:
+    """'Dm7 G7' -> ['Dm7', 'G7']; 'C' -> ['C']; '' -> ['']."""
+    found = [c for c in re.split(r"[\s,]+", str(symbol or "").strip()) if c]
+    return found[:MAX_CHORDS_PER_BAR] or [""]
+
+
+def chord_spans(symbol, units: Fraction, beat: Fraction) -> list:
+    """[(chord, start, end)] across one bar, in units, split on a beat.
+
+    Two chords in 4/4 take two beats each; in 3/4 the first takes two beats and
+    the second one, which is how a cadence in triple time is usually felt.
+    """
+    chords = bar_chords(symbol)
+    if len(chords) == 1:
+        return [(chords[0], Fraction(0), units)]
+    beats = max(1, int(units / beat)) if beat else 1
+    split = Fraction(-(-beats // 2)) * beat if beats > 1 else units / 2
+    return [(chords[0], Fraction(0), split), (chords[1], split, units)]
+
+
+def chord_at(symbol, position: Fraction, units: Fraction, beat: Fraction) -> str:
+    for chord, start, end in chord_spans(symbol, units, beat):
+        if start <= position < end:
+            return chord
+    return bar_chords(symbol)[-1]
+
+
+def chord_pcs_at(symbol, position: Fraction, units: Fraction, beat: Fraction):
+    return chord_pcs(chord_at(symbol, position, units, beat))
+
+
 def _nearest_in(midi: int, pcs: set) -> int:
     for step in range(1, 7):
         for candidate in (midi - step, midi + step):
@@ -240,12 +296,13 @@ def harmonise(voices: dict, chords: list, beat: Fraction) -> int:
     """
     moved = 0
     for index, symbol in enumerate(chords):
-        pcs = chord_pcs(symbol)
-        if not pcs:
+        if not chord_pcs(symbol):
             continue
         for voice in VOICES:
             bar, position, fixed = voices[voice][index], Fraction(0), []
+            units = sum((dur for _, dur in bar), Fraction(0))
             for midi, dur in bar:
+                pcs = chord_pcs_at(symbol, position, units, beat) or chord_pcs(symbol)
                 on_beat = position % beat == 0
                 if voice == "soprano":
                     on_beat = on_beat and dur >= beat
@@ -276,7 +333,7 @@ def read_form(plan: dict, phrases: dict, roster: list, level: str) -> list:
         first = _clamp(entry.get("fromBar") or 1, 1, phrase["bars"], 1)
         last = _clamp(entry.get("toBar") or phrase["bars"], first, phrase["bars"],
                       phrase["bars"])
-        transpose = 0 if level == "beginner" else \
+        transpose = 0 if level == "beginner" or entry is plan["form"][-1] else \
             _clamp(entry.get("transpose"), -MAX_TRANSPOSE, MAX_TRANSPOSE, 0)
         texture = entry.get("texture") if entry.get("texture") in TEXTURES else "tutti"
         lead = entry.get("lead") if entry.get("lead") in part_ids else None
@@ -527,7 +584,12 @@ def realise(plan: dict, roster: list, sections: list, phrases: dict, units: Frac
                 bars_low = [rest] * s["bars"]
             else:
                 own_text = mine.get(index)
-                bars_up, bars_low = _play(part, s, role, voice, treatment, phrases,
+                # A keyboard inside an orchestra plays the section as though it
+                # were two steps quieter: lighter chords, no hammered octaves.
+                # Its printed dynamics are lowered to match in finish_parts.
+                heard = {**s, "dynamic": SOFTER[s["dynamic"]]} \
+                    if accompanies(part, roster) else s
+                bars_up, bars_low = _play(part, heard, role, voice, treatment, phrases,
                                           own_text, base, home_written,
                                           key, units, low, high, context)
                 if own_text and own_text.get("abc"):
@@ -766,7 +828,9 @@ def harmony_clashes(text: str, part: dict, phrase: dict, home_written: str,
         # chorale voices leave them out.
         pcs = {m % 12 for m in (_sounding_at(chord[v][index], at) for v in VOICES)
                if m is not None}
-        named = chord_pcs(symbols[index]) if index < len(symbols) else None
+        units = sum((d for _, d in bars[index]), Fraction(0)) if index < len(bars) else 0
+        named = chord_pcs_at(symbols[index], at, units, beat) if index < len(symbols) \
+            else None
         return pcs | (named or set())
 
     for index, bar in enumerate(bars[:phrase["bars"]]):
@@ -971,9 +1035,9 @@ def _beat_chords(phrase: dict, section: dict, beat: Fraction, units: Fraction,
     out = []
     for index in range(section["from"], section["to"]):
         symbol = phrase["chords"][index] if index < len(phrase["chords"]) else ""
-        symbol_pcs = chord_pcs(symbol)
         position = Fraction(0)
         while position < units:
+            symbol_pcs = chord_pcs_at(symbol, position, units, beat)
             sounding = {v: _sounding_at(phrase["voices"][v][index], position) for v in VOICES}
             move = shift + section["transpose"]
             voice_pcs = {(m + move) % 12 for m in sounding.values() if m is not None}
@@ -1202,7 +1266,8 @@ def snap_held(text: str, part: dict, chorale: dict, key: str, beat: Fraction,
                 pcs = {m % 12 for m in (_sounding_at(chorale["voices"][v][index], position)
                                         for v in VOICES) if m is not None}
                 symbols = chorale.get("chords") or []
-                pcs |= (chord_pcs(symbols[index]) if index < len(symbols) else None) or set()
+                pcs |= (chord_pcs_at(symbols[index], position, units, beat)
+                        if index < len(symbols) else None) or set()
                 if pcs and (midi + shift) % 12 not in pcs:
                     plan.append(_nearest_in(midi + shift, pcs) - shift)
                     position += dur
@@ -1309,3 +1374,153 @@ def fix_line(text: str, bars: int, units: Fraction, part: dict, key: str) -> str
             fitted.append(orchestrate.remap_notes(bar, key, plan))
         split = fitted
     return " | ".join(split) + " |"
+
+
+# ---------------------------------------------------------------------------
+# Balance: the keyboard inside an orchestra
+# ---------------------------------------------------------------------------
+
+# In an orchestra the piano is a colour, not the engine: a forte keyboard part
+# under a dozen players sounds like a hammer. Its dynamics sit two steps below
+# the ensemble's and its writing stays light. On its own, or with one partner,
+# it plays at full strength.
+SOFTER = {"pppp": "pp", "ppp": "pp", "pp": "pp", "p": "pp", "mp": "p", "mf": "p",
+          "f": "mp", "ff": "mf", "fff": "mf", "ffff": "mf"}
+DYNAMIC_MARK_RE = re.compile(r"!(p{1,4}|mp|mf|f{1,4}|sfz|fp)!")
+
+
+def is_keyboard(part: dict) -> bool:
+    return options.FAMILY_OF.get(part["instrument"]) == "Keyboard"
+
+
+def accompanies(part: dict, roster: list) -> bool:
+    """A keyboard playing inside an ensemble, which must stay soft."""
+    return is_keyboard(part) and len(roster) > 2
+
+
+def soften_marks(text: str) -> str:
+    """Every dynamic in a keyboard line, two steps quieter; sfz becomes an accent."""
+    def quieter(match):
+        mark = match.group(1)
+        if mark == "sfz":
+            return "!accent!"
+        if mark == "fp":
+            return "!p!"
+        return f"!{SOFTER[mark]}!"
+    return DYNAMIC_MARK_RE.sub(quieter, text or "")
+
+
+# ---------------------------------------------------------------------------
+# The ending: V7 to I, slowing over the last two bars, the last chord held
+# ---------------------------------------------------------------------------
+
+RIT_MARK = '"^rit."'
+FERMATA = "!fermata!"
+
+
+def _root_pc(symbol: str):
+    match = CHORD_RE.match(str(symbol or ""))
+    return orchestrate.PITCH_OF_KEY.get(match.group(1) + match.group(2)) if match else None
+
+
+def cadence_chords(key: str) -> tuple:
+    """(V7, I) of ``key``: ('G7', 'C') in C major, ('E7', 'Am') in A minor."""
+    root, minor = orchestrate._split_key(key)
+    dominant = orchestrate.transpose_chord(root, 7, key) + "7"
+    return dominant, root + ("m" if minor else "")
+
+
+def close_on_cadence(chords: list, key: str) -> list:
+    """The chord grid's last two bars made into a perfect cadence: … V7 | I.
+
+    The penultimate bar keeps its first chord when that leads into the
+    dominant ('Dm7 G7'), so the harmony quickens into the close rather than
+    simply stopping.
+    """
+    if not chords:
+        return chords
+    dominant, tonic = cadence_chords(key)
+    chords = list(chords)
+    chords[-1] = tonic
+    if len(chords) > 1:
+        before = bar_chords(chords[-2])
+        five = _root_pc(dominant)
+        if _root_pc(before[0]) == five:
+            chords[-2] = dominant
+        else:
+            chords[-2] = f"{before[0]} {dominant}" if before[0] else dominant
+    return chords
+
+
+def _bar_spans(music: str) -> list:
+    """[(start, end)] of each bar's text, so barlines can be kept as written."""
+    spans, start, i, n = [], 0, 0, len(music)
+    while i < n:
+        ch = music[i]
+        if ch in "!\"":
+            j = music.find(ch, i + 1)
+            i = n if j < 0 else j + 1
+            continue
+        if ch == "[" and abc_check.INLINE_FIELD_RE.match(music, i):
+            j = music.find("]", i)
+            i = n if j < 0 else j + 1
+            continue
+        barline = orchestrate.BARLINE_RE.match(music, i)
+        if barline:
+            spans.append((start, i))
+            i = start = barline.end()
+            continue
+        i += 1
+    spans.append((start, n))
+    return [(a, b) for a, b in spans if music[a:b].strip()]
+
+
+INLINE_KEY_RE = re.compile(r"\[K:([^\]]*)\]")
+
+
+def finish_line(text: str, key: str, units: Fraction, rit: bool = True) -> str:
+    """Mark 'rit.' over the last two bars and hold the final chord under a fermata.
+
+    The final bar becomes its first sounding note or chord — the tonic arrival —
+    held for the whole bar, so the piece ends on a sustained chord instead of
+    stopping mid-figure. Its dynamic is kept.
+    """
+    if not text:
+        return text
+    keys = INLINE_KEY_RE.findall(text)
+    key = keys[-1].strip() if keys else key
+    spans = _bar_spans(text)
+    if not spans:
+        return text
+    a, b = spans[-1]
+    last = text[a:b]
+    head = INLINE_AT_START_RE.match(last.strip()).group(0)
+    events = (orchestrate.read_bars(last, key) or [[]])[0]
+    sounding = next((midi for midi, _ in events if midi is not None), None)
+    marks = DYNAMIC_MARK_RE.findall(last)
+    if sounding is None:
+        held = orchestrate.rest_bar(units)
+    else:
+        held = orchestrate.render_bars([(sounding, units)], key, units)[0]
+    lead = (f"!{marks[0]}!" if marks else "") + FERMATA
+    new_last = f" {head}{lead}{held} "
+    text = text[:a] + new_last + text[b:]
+
+    if rit and len(spans) > 1:
+        a, b = spans[-2]
+        text = text[:a] + " " + _after_fields(text[a:b].strip(), RIT_MARK) + " " + text[b:]
+    return re.sub(r"  +", " ", text)
+
+
+def finish_parts(parts: list, roster: list, units: Fraction) -> None:
+    """Close every staff the same way, in place. See finish_line."""
+    by_id = {part["partId"]: part for part in roster}
+    for written in parts:
+        key = written.get("abcKey") or "C"
+        written["abc"] = finish_line(written.get("abc"), key, units)
+        if written.get("abcLower"):
+            written["abcLower"] = finish_line(written["abcLower"], key, units, rit=False)
+        part = by_id.get(written["partId"])
+        if part and accompanies(part, roster):
+            written["abc"] = soften_marks(written["abc"])
+            written["abcLower"] = soften_marks(written.get("abcLower"))
