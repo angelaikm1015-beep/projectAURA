@@ -104,6 +104,9 @@ SECTION_SCHEMA = _obj({
     "dynamic": {"type": "string", "enum": list(form.DYNAMICS)},
     "lead": {"type": ["string", "null"],
              "description": "partId of the player carrying the melody, or null."},
+    "mainTheme": {"type": "boolean",
+                  "description": "true where the main theme (A) is heard as itself — its "
+                                 "opening clearly recognisable."},
     "texture": {"type": "string", "enum": ["tutti", "reduced", "solo"],
                 "description": "'solo': the lead alone in the foreground over a thin, "
                                "quiet accompaniment, several players resting."},
@@ -244,6 +247,16 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "main idea; theme B contrasts with it in contour, rhythm and harmony. These are",
         "the material the whole piece is built from, so make them memorable.",
         "",
+        "THE MAIN MELODY — theme A is the piece's identity: a tune anyone could sing",
+        "back after hearing it once. A distinctive rhythm, a clear contour with one",
+        "high point, an opening motif of a bar or two you'd recognise anywhere. It",
+        "is stated clearly near the start (one instrument, light accompaniment),",
+        "returns at least twice — at the climax and near the end — and each return",
+        "keeps its opening motif intact so it is unmistakable, while the rest of it",
+        "is varied. Between the returns, other music: theme B, episodes, development",
+        "of fragments. The main theme must be clear, but never replayed back to back.",
+        "  * mainTheme: true on the sections where theme A is heard as itself.",
+        "",
         f"SECTIONS — the whole piece in order, 4 to 16 bars each, {_length(level)} bars",
         "in total. It needs a real shape: exposition, contrast, development, a climax,",
         "a varied return and a close. A theme that comes back is never a copy: change",
@@ -255,6 +268,10 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "    binding. Use inversions, secondary dominants, suspensions that resolve;",
         "    avoid a grid that sits on I, IV and V.",
         "  * key: " + KEY_AREAS[level] + " The last section is in the home key.",
+        "    Modulate smoothly: the last bar before a new key is that key's ii – V7,",
+        "    and the new section begins on its tonic (both are set for you), so",
+        "    plan the harmony before it to lead there — a pivot chord both keys",
+        "    share, or a secondary dominant. Prefer closely related keys.",
         "  * dynamic: go near pp and near ff somewhere, with at least one sudden change.",
         "  * lead: pass the tune between instruments and families.",
         "  * texture: 'tutti' for arrivals and climaxes, 'reduced' for lighter",
@@ -301,6 +318,7 @@ def _plan(request: dict, roster: list, model: str) -> dict:
             "dynamic": entry.get("dynamic") if entry.get("dynamic") in form.DYNAMICS else "mf",
             "lead": entry.get("lead") if entry.get("lead") in part_ids else None,
             "texture": entry.get("texture") if entry.get("texture") in TEXTURES else "tutti",
+            "main": bool(entry.get("mainTheme")),
             "material": str(entry.get("material") or ""),
             "orchestration": str(entry.get("orchestration") or ""),
         })
@@ -308,6 +326,9 @@ def _plan(request: dict, roster: list, model: str) -> dict:
     for s in sections:
         if not s["lead"] and s["texture"] == "solo":
             s["texture"] = "reduced"      # a solo needs a soloist
+    if sections and not any(s["main"] for s in sections):
+        # A piece needs its tune: the first real section states it.
+        next((s for s in sections if s["bars"] >= 4), sections[0])["main"] = True
     if not sections:
         raise ComposerError("The planner didn't lay out any sections this time. "
                             "Please try again.", status=502)
@@ -315,6 +336,13 @@ def _plan(request: dict, roster: list, model: str) -> dict:
     # Every piece closes the same way: home, V7, then the tonic held.
     last = sections[-1]
     last["key"] = home
+    # Every change of key is prepared: ii – V7 of the new key, then its tonic.
+    for before, after in zip(sections, sections[1:]):
+        before["modulates"] = not form.same_key(before["key"], after["key"])
+        if before["modulates"]:
+            after["chords"] = form.arrive_in(after["chords"], after["key"])
+            before["chords"] = form.lead_into(before["chords"], after["key"])
+    last["modulates"] = False
     last["chords"] = form.close_on_cadence(last["chords"], home)
 
     plan["_sections"] = sections
@@ -392,6 +420,8 @@ def _overview(plan: dict, request: dict, roster: list, here: list) -> list:
         lead = f", tune: {by_id[s['lead']]['label']}" if s["lead"] else ""
         if s["texture"] == "solo" and s["lead"]:
             lead = f", SOLO: {by_id[s['lead']]['label']}"
+        if s["main"]:
+            lead += ", MAIN THEME"
         lines.append(f"{mark} s{index + 1} mm.{s['start']}-{s['end']} [{s['label']}] "
                      f"{s['key']}, {s['dynamic']}{lead}. {s['material']} / {s['orchestration']}")
     return lines
@@ -407,6 +437,17 @@ def _section_head(plan: dict, index: int) -> list:
         f"  material: {s['material']}",
         f"  orchestration: {s['orchestration']}",
     ]
+    if index and not form.same_key(sections[index - 1]["key"], s["key"]):
+        lines.append(f"  NEW KEY: arrives from {sections[index - 1]['key']} on {s['key']}'s "
+                     "tonic, the resolution of the V7 before it — settle the new key in.")
+    if s.get("modulates"):
+        nxt = sections[index + 1]["key"]
+        lines.append(f"  KEY CHANGE AHEAD: the last bar is ii – V7 of {nxt}. Lead every "
+                     f"line into it by step: the leading tone of {nxt} rises to its tonic, "
+                     "sevenths fall, nothing leaps across the barline.")
+    if s.get("main"):
+        lines.append("  MAIN THEME: theme A is heard here as itself — its opening motif "
+                     "exactly (rhythm and intervals, in this key), the rest varied.")
     if index + 1 == len(sections):
         lines.append("  THE END: the last bar is the tonic chord, one note held for the "
                      "whole bar (it will be held under a fermata).")
@@ -484,11 +525,18 @@ def _material(bar: str):
     return plain if len(_NOTE_RE.findall(plain)) >= MOTION_NOTES else None
 
 
-def _repeats(texts: dict, index: int) -> list:
-    """Bars of the melody's section ``index`` that copy what was already played."""
+def _repeats(texts: dict, index: int, main=frozenset()) -> list:
+    """Bars of the melody's section ``index`` that copy what was already played.
+
+    The opening two bars of each main-theme section are the theme's motif,
+    which is meant to come back intact, so they are not counted.
+    """
     def bars(i):
-        return [_material(b) for b in orchestrate.split_bars((texts.get(i) or {}).get("abc")
-                                                               or "")]
+        out = [_material(b) for b in orchestrate.split_bars((texts.get(i) or {}).get("abc")
+                                                              or "")]
+        if i in main:
+            out[:2] = [None] * len(out[:2])
+        return out
     here = bars(index)
     earlier = [b for i in sorted(texts) if i < index for b in bars(i) if b]
     seen = {}
@@ -508,6 +556,100 @@ def _repeats(texts: dict, index: int) -> list:
             "played for the third time or more, note for note. It sounds repetitive: vary "
             "them — change the rhythm, ornament, alter the contour or the phrase ending — "
             "keeping the harmony.")
+    return problems
+
+
+HEAD_NOTES = 5       # the notes of theme A that make its motif
+
+
+def _pitches(music: str, key: str) -> list:
+    return [m for bar in orchestrate.read_bars(music or "", key) for m, _ in bar
+            if m is not None]
+
+
+def _theme_head(plan: dict) -> list:
+    """The intervals that open theme A, the piece's main melody."""
+    theme = next((t for t in plan.get("themes") or [] if str(t.get("id")).strip() == "A"),
+                 None)
+    notes = _pitches((theme or {}).get("abc"), plan["concertKey"])[:HEAD_NOTES]
+    return [b - a for a, b in zip(notes, notes[1:])]
+
+
+def _contains_motif(notes: list, head: list) -> bool:
+    """``head``'s intervals somewhere in ``notes``, a semitone of give each way
+    (a return in the minor turns a major third minor)."""
+    steps = [b - a for a, b in zip(notes, notes[1:])]
+    for start in range(len(steps) - len(head) + 1):
+        if all(abs(x - y) <= 1 and (x > 0) == (y > 0) and (x < 0) == (y < 0)
+               for x, y in zip(steps[start:], head)):
+            return True
+    return False
+
+
+def _theme_missing(plan: dict, text: dict, index: int) -> list:
+    s = plan["_sections"][index]
+    head = _theme_head(plan)
+    if not s.get("main") or len(head) < 3:
+        return []
+    if _contains_motif(_pitches(text.get("abc"), s["key"]), head):
+        return []
+    return [f"melody s{index + 1}: this is where the main theme returns, but its opening "
+            "motif isn't recognisable. Begin the phrase with theme A's first notes — same "
+            "rhythm and intervals, in this section's key — then vary what follows."]
+
+
+BREATHING = ("Woodwinds", "Brass", "Voice")
+ARTICULATED = ("Strings", "Woodwinds", "Brass", "Voice")
+FAST_SECONDS = 0.26  # notes this short need their articulation shown
+_ARTICULATION_RE = re.compile(
+    r"\((?!\d)|\)|\.(?=[\^_=A-Ga-g\[])|"
+    r"!(?:staccato|staccatissimo|tenuto|accent|>|marcato|wedge|upbow|downbow|slide)!|"
+    r'"\^[^"]*(?:stacc|spicc|legato|détaché|detach|marc|sim\.|tongue|bow)', re.I)
+
+
+def _playability(part: dict, text: dict, index: int, plan: dict) -> list:
+    """How to play it must be on the page: fast runs articulated, room to breathe."""
+    family = options.FAMILY_OF.get(part["instrument"], "")
+    if part is MELODY or not part["pitched"] or family not in ARTICULATED:
+        return []
+    s = plan["_sections"][index]
+    key = form.written_key_for(part, s["key"])
+    beat = form.beat_units(plan["timeSignature"])
+    seconds_per_unit = 60 / max(20, int(plan.get("tempoBpm") or 96)) / float(beat)
+    music = text.get("abc") or ""
+    bars = orchestrate.split_bars(music)
+    events = orchestrate.read_bars(music, key)
+    label = f"{part['label']} s{index + 1}"
+
+    bare, problems = [], []
+    for number, (bar, notes) in enumerate(zip(bars, events)):
+        fast = sum(1 for m, d in notes if m is not None and d * seconds_per_unit <= FAST_SECONDS)
+        if fast >= 4 and not _ARTICULATION_RE.search(bar):
+            bare.append(s["start"] + number)
+    if bare:
+        how = ("slur them in bow groups — (cdef) — or mark détaché/spiccato with dots, and "
+               "put !downbow! / !upbow! where a phrase starts" if family == "Strings" else
+               "slur them in breath groups — (cdef) — or mark tonguing with staccato dots, "
+               "tenuto or accents")
+        problems.append(f"{label}: mm. {', '.join(map(str, bare))} have runs of fast notes "
+                        f"with no articulation, so the player can't tell how to play them: "
+                        f"{how}.")
+
+    if family in BREATHING:
+        run, longest, start_of = 0, (0, 0), 0
+        for number, (bar, notes) in enumerate(zip(bars, events)):
+            breathes = "!breath!" in bar or any(m is None for m, _ in notes)
+            run = 0 if breathes else run + 1
+            if run == 1:
+                start_of = number
+            if run > longest[0]:
+                longest = (run, start_of)
+        if longest[0] > composer.BREATH_BARS:
+            first = s["start"] + longest[1]
+            problems.append(f"{label}: mm. {first}-{first + longest[0] - 1} go "
+                            f"{longest[0]} bars without a rest or a breath. Mark !breath! "
+                            "(or a short rest) at the ends of phrases, every two to four "
+                            "bars.")
     return problems
 
 
@@ -550,7 +692,8 @@ def _repair_prompt(plan: dict, part: dict, texts: dict, broken: dict) -> str:
         lines.append("")
     lines += ["Correct exactly these problems: durations, bar count, notes out of range,",
               "held or on-the-beat notes off the chord, the closing bar, bars repeated",
-              "too often. Keep everything else — the line, its rhythm, its articulation.",
+              "too often, the main theme's motif, missing articulation or breaths. Keep",
+              "everything else — the line, its rhythm, its articulation.",
               "Return only these sections."]
     if part is not MELODY:
         lines.append(f"Use partId {part['partId']}.")
@@ -565,8 +708,13 @@ def _review(part: dict, texts: dict, plan: dict, level: str, model: str) -> tupl
     def found_in(index, text):
         """(defects, repetition): the second is a matter of taste, never settled."""
         hard = _defects(part, text, index, plan, level)
-        soft = _repeats({**texts, index: text}, index) if part is MELODY and not hard else []
-        return hard, soft
+        if hard:
+            return hard, []
+        if part is MELODY:
+            main = frozenset(i for i, s in enumerate(plan["_sections"]) if s.get("main"))
+            return hard, (_repeats({**texts, index: text}, index, main)
+                          + _theme_missing(plan, text, index))
+        return hard, _playability(part, text, index, plan)
 
     broken = {i: found for i, text in texts.items() if any(found := found_in(i, text))}
     schema, name = (MELODY_SCHEMA, "melody_fix") if part is MELODY else (PART_SCHEMA, "part_fix")
@@ -581,7 +729,9 @@ def _review(part: dict, texts: dict, plan: dict, level: str, model: str) -> tupl
         for index, text in _by_section(reply.get("sections"), set(broken)).items():
             hard, soft = found_in(index, text)
             was_hard, was_soft = broken[index]
-            if len(hard) <= len(was_hard) and len(hard) + len(soft) < len(was_hard) + len(was_soft):
+            # Fewer real errors always wins; otherwise it must also be better played.
+            if len(hard) < len(was_hard) or (len(hard) == len(was_hard)
+                                             and len(soft) < len(was_soft)):
                 texts[index] = text
                 broken[index] = (hard, soft)
         broken = {i: found for i, found in broken.items() if any(found)}
@@ -629,7 +779,8 @@ def _melody_prompt(plan: dict, request: dict, roster: list, run: list, melody: d
         "    written between G3 and C6 (players move it into their own octave).",
         "  * Where a section's orchestration has no tune (an accompaniment-only",
         "    passage), write the most important line there instead.",
-        "  * Mark dynamics, hairpins, slurs and accents.",
+        "  * Mark dynamics, hairpins, slurs over each phrase, and accents.",
+        *composer.READABLE_RHYTHM,
         "",
         *_rules(beats),
         "  * abcLower is always null.",
@@ -769,6 +920,10 @@ def _part_prompt(plan: dict, request: dict, roster: list, run: list, part: dict,
         "    rhythm, register, articulation or pattern — so no passage is a rerun.",
         "  * Approaching the end, slow your motion: longer values in the last two bars,",
         "    and one held note in the final bar.",
+        "",
+        "SHOW HOW TO PLAY IT — this part will be performed from the page:",
+        *composer.HOW_TO_PLAY.get(family, []),
+        *composer.READABLE_RHYTHM,
         "",
         *_rules(beats),
         f"  * Write pitch in YOUR WRITTEN KEY for each section. Use partId {part['partId']}.",

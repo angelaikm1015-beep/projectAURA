@@ -1057,6 +1057,45 @@ def revise(score: dict, request: dict, instruction: str) -> dict:
 # another bar of four-voice chorale in the one call that cannot be parallelised
 # — so it was capped at 16 to 32 bars. Now a long piece costs about what a short
 # one did, and the model's attention goes on the bars that are actually new.
+# How long a wind or brass player, or a singer, can go without a breath.
+BREATH_BARS = 6
+
+# What a player needs printed to play a line the way it was meant, by family.
+HOW_TO_PLAY = {
+    "Strings": [
+        "  * Bowing: slur the notes taken in one bow — (cdef) — and leave separate",
+        "    bows unslurred; mark !downbow! on strong-beat phrase starts and",
+        "    !upbow! on pickups. Fast runs are slurred in groups of 2, 4 or a whole",
+        "    beat, or marked with staccato dots (spiccato) — never left bare.",
+        "  * Write \"^pizz.\" and \"^arco\" where the technique changes.",
+    ],
+    "Woodwinds": [
+        "  * Tonguing: slur what is played in one breath — (cdef) — and dot the",
+        "    notes that are tongued short; mixed patterns (two slurred, two",
+        "    tongued) are clearest for fast passages. Never leave a fast run bare.",
+        "  * Breathing: a rest or !breath! at the end of each phrase, at least",
+        f"    every {BREATH_BARS} bars.",
+    ],
+    "Brass": [
+        "  * Articulation on every figure: slurs for legato, dots, tenuto (!tenuto!)",
+        "    or accents for tongued notes. Fast passages stay simple and clearly",
+        "    tongued.",
+        "  * Breathing: a rest or !breath! at the end of each phrase, at least",
+        f"    every {BREATH_BARS} bars; long notes need recovery time after.",
+    ],
+    "Voice": [
+        "  * Slur the notes sung to one syllable; breathe (!breath! or a rest) at",
+        "    phrase ends.",
+    ],
+}
+
+READABLE_RHYTHM = [
+    "  * Rhythm the player can read at sight: beam and tie to show the beats",
+    "    (in 4/4 the middle of the bar is visible), no tuplet inside a tuplet,",
+    "    syncopation written as ties across the beat rather than odd values.",
+]
+
+
 LENGTHS = {
     "beginner": ("48 to 72", "20 to 28"),
     "intermediate": ("64 to 100", "28 to 40"),
@@ -1114,7 +1153,12 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "  * For each phrase give a chord for EVERY bar and a short description of",
         "    its character: the melody's shape and rhythm, the texture, and how it",
         "    ends. Phrases are usually four or eight bars.",
-        "  * Phrase A is the main theme. Phrase B must contrast with it: different",
+        "  * Phrase A is the main theme — the piece's identity, a tune anyone could",
+        "    sing back after one hearing: a distinctive rhythm, a clear contour with",
+        "    one high point, an opening motif you'd recognise anywhere. The form opens",
+        "    with it stated clearly, brings it back at the climax and near the end,",
+        "    and puts other music between those returns.",
+        "  * Phrase B must contrast with it: different",
         "    contour, rhythm and harmonic area. Further phrases may be a bridge, a",
         "    development idea, or a closing phrase that cadences firmly home.",
         "  * The chord symbols are binding — every instrument will sit on them — so",
@@ -1360,6 +1404,7 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
     if not request["conductor"]:
         plan["conductor"] = None
     _tidy_labels(plan)
+    _modulate_light(plan)
     _close_light(plan)
 
     # The chorales, one phrase per call, and the words for the players — all
@@ -1405,6 +1450,45 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
     plan["_phrases"], plan["_sections"] = phrases, sections
     _tidy_conductor(plan)
     return plan
+
+
+def _transpose_of(entry: dict) -> int:
+    try:
+        return int(entry.get("transpose") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _modulate_light(plan: dict) -> None:
+    """Prepare every key change in the form: ii – V7 of the new key first.
+
+    A section that simply starts in a new key is a jump. The section before it
+    gets its own copy of its phrase, with its last bar leading into the new
+    key; the copy's chorale is composed toward that, so the voices move into
+    the new key by step. Chords are in the phrase's own (home-key) frame,
+    which the section's transposition then moves.
+    """
+    phrases = {p.get("id"): p for p in plan.get("phrases") or [] if p.get("chords")}
+    form_entries = [e for e in plan.get("form") or [] if e.get("phrase") in phrases]
+    home = plan["concertKey"]
+    made = {}
+    for before, after in zip(form_entries, form_entries[1:]):
+        step = _transpose_of(after) - _transpose_of(before)
+        if step % 12 == 0:
+            continue
+        phrase = phrases[before["phrase"]]
+        end = min(len(phrase["chords"]), int(before.get("toBar") or len(phrase["chords"])))
+        target = orchestrate.shift_key(home, step)
+        name = f"{phrase['id']}-to-{target.split()[0]}-{end}"
+        if name not in made:
+            chords = list(phrase["chords"])
+            chords[:end] = form.lead_into(chords[:end], target)
+            made[name] = {**phrase, "id": name, "chords": chords,
+                          "character": (phrase.get("character") or "") + " Its last bar "
+                                       "modulates: ii – V7 of the next key, every voice "
+                                       "led into it by step."}
+            plan["phrases"].append(made[name])
+        before["phrase"] = name
 
 
 def _close_light(plan: dict) -> None:
@@ -1556,6 +1640,9 @@ def _section_prompt(plan: dict, request: dict, roster: list, part: dict,
     ]
     if technique:
         lines.append(f"TECHNIQUE THIS PLAYER MUST BE GIVEN: {technique}")
+    if part["pitched"]:
+        lines += ["SHOW HOW TO PLAY IT — this part will be performed from the page:",
+                  *HOW_TO_PLAY.get(family, []), *READABLE_RHYTHM]
     quota = DIFFICULTY_QUOTA.get(request["level"])
     if quota and part["pitched"]:
         lines += ["MINIMUM DIFFICULTY — count it in what you return; falling short is a",

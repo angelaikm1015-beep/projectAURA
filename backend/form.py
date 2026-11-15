@@ -1642,3 +1642,44 @@ def balance_parts(parts: list, roster: list, sections: list) -> None:
         if written.get("abcLower"):
             written["abcLower"] = balance_line(written["abcLower"], part["partId"], sections,
                                                solo_mark=False)
+
+
+# ---------------------------------------------------------------------------
+# Modulation: leading into a new key instead of jumping
+# ---------------------------------------------------------------------------
+
+def same_key(a: str, b: str) -> bool:
+    (ra, ma), (rb, mb) = orchestrate._split_key(a), orchestrate._split_key(b)
+    return ma == mb and orchestrate.PITCH_OF_KEY.get(ra) == orchestrate.PITCH_OF_KEY.get(rb)
+
+
+def approach_chords(key: str) -> tuple:
+    """(ii7, V7) of ``key``: ('Am7', 'D7') into G major, ('F#ø7', 'B7') into E minor."""
+    root, minor = orchestrate._split_key(key)
+    two = orchestrate.transpose_chord(root, 2, key) + ("ø7" if minor else "m7")
+    return two, cadence_chords(key)[0]
+
+
+def lead_into(chords: list, key: str) -> list:
+    """A section's last bar made to lead into ``key``: ii – V7 of the new key.
+
+    A section in a new key that simply starts is a jump. With the old
+    section's last bar on the new key's ii and V7, the ear hears the new tonic
+    coming, and the arrival is a resolution rather than a jolt.
+    """
+    if not chords:
+        return chords
+    chords = list(chords)
+    chords[-1] = " ".join(approach_chords(key))
+    return chords
+
+
+def arrive_in(chords: list, key: str) -> list:
+    """A section's first bar made the new key's tonic, where the V7 resolves."""
+    if not chords:
+        return chords
+    chords = list(chords)
+    tonic = cadence_chords(key)[1]
+    if _root_pc(bar_chords(chords[0])[0]) != _root_pc(tonic):
+        chords[0] = tonic
+    return chords

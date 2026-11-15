@@ -288,6 +288,21 @@ seconds).
 * **Solos.** Both planners give at least one player a solo section (two or more
   at higher-intermediate and pro in deep mode), with the rest resting or
   accompanying very lightly.
+* **The main melody.** Theme A (phrase A in light mode) is asked to be a tune
+  you could sing back, stated near the start and returning at the climax and
+  near the end, with other music between. Deep-mode sections flagged
+  `mainTheme` must open with theme A's motif (`_theme_missing`, a semitone of
+  give for minor-key returns). Those two bars don't count as repetition.
+* **Key changes.** Each one is prepared. The last bar before a new key is that
+  key's ii – V7 (`lead_into`), and deep mode starts the new section on its
+  tonic (`arrive_in`). Light mode gives the section before a modulation its own
+  copy of its phrase so its chorale is composed toward the new key. The prompts
+  tell each line to move into it by step.
+* **Playable parts.** Strings, winds, brass and voices are told how to mark
+  what a player needs: bowings and slur groups, tonguing, breaths and readable
+  rhythms. Deep mode's review (`_playability`) sends back bars of fast notes
+  with no articulation, and wind, brass or voice lines that go more than six
+  bars without a rest or breath.
 * **Repetition.** Light mode writes three to five phrases, roughly 40% of the
   piece's bars, so each is heard fewer times. Deep mode shows the model the
   whole melody so far. Its review sends back any melody section whose bars are

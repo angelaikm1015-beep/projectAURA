@@ -604,13 +604,17 @@ check("  and the bass and the tune, already on the chord, are left alone",
       voices["bass"][0] == [(43, Fr(8))] and voices["soprano"][0] == [(71, Fr(8))])
 
 HELD = json.loads(json.dumps(FAKE_MODEL_OUTPUT))
-HELD["parts"][0]["sections"][0]["abc"] = "(B c) d2 .d4 | c8 |"     # C held over D
+HELD["parts"][0]["sections"][2]["abc"] = "(B c) d2 .d4 | c8 |"     # C held over D
 r, create = call_with_model(COMPOSE, FakeCompletion(HELD))
 lead = r.json["score"]["written"][0]["abc"] if r.status_code == 201 else ""
 check("a note held against the chord is moved onto it in place, with no extra call",
       create.call_count == 2 and "c8" not in lead and "d8" in lead, (create.call_count, lead))
 check("  and the rest of the line, articulation included, is kept",
-      "(B c) d2 .d4 | d8" in lead, lead)
+      '(B c) d2 .d4 | "^rit." d8' in lead, lead)
+check("a key change is prepared: ii - V7 of the new key, in a copy of the phrase",
+      [h["chord"] for h in r.json["score"]["harmony"]][1:5] == ["Dm7 G7", "Am", "Am7 D7", "G"]
+      if r.status_code == 201 else False, r.json["score"]["harmony"] if r.status_code == 201
+      else r.status_code)
 
 # The outline names the chords; each phrase's chorale is its own call. If one
 # fails, the piece still arrives, with that phrase voiced from its chords.
@@ -638,11 +642,12 @@ fake.chat.completions.create.side_effect = outline_answer
 with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
      mock.patch.object(composer, "client", return_value=fake):
     r = client.post("/api/compose", json=COMPOSE, headers=AUTHED)
-# Two phrases, plus the closing section's own copy of its phrase, ending V7 - I.
+# Two phrases, plus a copy of each that leads into a new key, plus the closing
+# section's own copy of its phrase, ending V7 - I.
 check("each phrase's chorale is written in its own call",
-      chorale_names.count("chorale") == 3 and chorale_names[0] == "plan", chorale_names)
+      chorale_names.count("chorale") == 5 and chorale_names[0] == "plan", chorale_names)
 check("  the last section closes on V7 - I without changing the phrase's earlier hearings",
-      [h["chord"] for h in r.json["score"]["harmony"]][:2] == ["G", "D"]
+      [h["chord"] for h in r.json["score"]["harmony"]][4:6] == ["G", "D"]
       and r.json["score"]["harmony"][-1]["chord"] == "G", r.json["score"]["harmony"])
 check("  a failed chorale still delivers the whole piece, every part, every bar",
       r.status_code == 201 and len(r.json["score"]["parts"]) == 5
@@ -859,6 +864,35 @@ check("deep: bars heard a third time are sent back to be varied",
       deep._repeats(tune, 2) and not deep._repeats(tune, 1), deep._repeats(tune, 2))
 check("  a fresh section is left alone",
       not deep._repeats({**tune, 2: {"abc": "efga | bagf | e8 |"}}, 2))
+
+# Key changes are prepared: ii - V7 of the new key, then its tonic.
+deep_chords = [h["chord"] for h in deep_score["harmony"]]
+check("deep: a key change is led into by ii - V7 and lands on the new tonic",
+      deep_chords[19] == "Am7 D7" and deep_chords[20] == "G" and deep_chords[35] == "Dm7 G7",
+      deep_chords[18:22] + deep_chords[34:37])
+
+# The main theme must be recognisable where it returns: its opening intervals,
+# a semitone of give (a return in the minor).
+check("deep: the main theme's motif is found, in the major or the minor",
+      deep._contains_motif([55, 60, 64, 67, 72, 72], [4, 3, 5, 0])
+      and deep._contains_motif([60, 63, 67, 72, 72], [4, 3, 5, 0])
+      and not deep._contains_motif([60, 62, 64, 65, 67], [4, 3, 5, 0]))
+
+# How to play it must be on the page.
+PLAY_PLAN = {"timeSignature": "4/4", "tempoBpm": 120,
+             "_sections": [{"start": 1, "key": "C major"}]}
+OBOE = {"label": "Oboe", "instrument": "Oboe", "pitched": True, "transpose": 0}
+VIOLIN = {"label": "Violin", "instrument": "Violin", "pitched": True, "transpose": 0}
+bare = {"abc": " | ".join(["cdef gfed"] * 2 + ["c8"] * 6) + " |"}
+check("deep: a bare run of fast notes is sent back to be articulated",
+      any("articulation" in p for p in deep._playability(VIOLIN, bare, 0, PLAY_PLAN)),
+      deep._playability(VIOLIN, bare, 0, PLAY_PLAN))
+check("  slurred runs, with breaths, pass",
+      not deep._playability(OBOE, {"abc": "(cdef) .g.f.e.d | c8 | c4 z4 | c8 |"}, 0,
+                            PLAY_PLAN))
+check("  a wind line eight bars without a breath is sent back",
+      any("breath" in p for p in deep._playability(OBOE, bare, 0, PLAY_PLAN))
+      and not any("breath" in p for p in deep._playability(VIOLIN, bare, 0, PLAY_PLAN)))
 
 # Balance: the tune above, the accompaniment a step under it, two under a solo.
 BAL_SECTIONS = [{"start": 1, "end": 2, "bars": 2, "dynamic": "f", "lead": "P1", "texture": "tutti"},
