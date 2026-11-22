@@ -67,7 +67,8 @@ MODES = {
         "labels": {**STAGE_LABELS,
                    "planning": "Composing the themes, the form and every bar's harmony",
                    "melody": "Composing the melody of the whole piece",
-                   "writing": "Composing the parts one by one against the melody"},
+                   "writing": "Composing the parts in waves, then reviewing each passage "
+                              "as a full score"},
     },
 }
 

@@ -241,18 +241,50 @@ The compose page offers two modes.
   in the order a composer works:
   1. **Architecture.** One call with high reasoning effort sets out the themes,
      the form, the harmony of every bar, and each section's key, material and
-     orchestration.
-  2. **Melody.** The model writes the melody of the whole piece, section by
-     section in order, each call seeing the melody so far.
-  3. **Parts.** The model writes each part on its own: the bass first, then the
-     players who carry the tune, then the inner and accompanying parts, with
-     percussion last. Each part is written against the melody and against every
-     part already written. Passages of up to 32 bars run side by side, but within
-     a passage the players go strictly in turn.
+     texture. It also writes a one-sentence brief for every player in every
+     section, so the parts are planned as a few layers that fit together.
+  2. **Melody and bass.** The model sketches the outer voices together: the
+     melody and its bass line on two staves, in chunks of up to 64 bars, each
+     continuing from what's already written. The bass is checked to name each
+     chord's bass note (`_bass_problems`).
+  3. **Parts, in two waves per passage.** First the frame, together: the bass
+     player, handed the sketch's bass line, and whoever carries the tune, handed
+     the melody. Then everyone else, together. Each of them hears the frame, as
+     ABC and beat by beat at concert pitch (`ensemble.score_grid`), and is given
+     the chord tones that are its own (`inner_voices` / `_harmony_notes`, from
+     `form.voice_chords`), so between them every chord is complete. Each prompt
+     opens with the player's brief, then the music it fits, then orientation,
+     the instrument, and the format rules last. Things Python enforces anyway
+     aren't repeated: balance, the ending, cadences and key-change chords.
+     Passages of up to 32 bars run side by side.
+  4. **The passage review.** With every part in, one call reads the whole
+     passage as a full score, beat by beat. It also gets the problems
+     [ensemble.py](backend/ensemble.py) finds between parts: held semitone
+     clashes, chords nobody gives the third to, parallel fifths and octaves,
+     close intervals below E3, and an accompanist sitting on top of the tune or
+     doubling a soloist. It also gets the playability problems: bare fast runs,
+     and wind lines with no breath. It rewrites the part-sections that need it.
+     A revision is kept only if it adds no errors to its own line and the
+     passage comes out with no more problems than before.
 
   Python counts every bar and checks range, held notes against the chords and
-  the closing bar. It sends the defects back to the model for up to two
-  correction rounds, and only then trims or pads a bar so the staves line up.
+  the closing bar. It sends defects back once for a part (twice for the
+  melody) before trimming or padding a bar so the staves line up.
+
+  A passage costs three calls in a row (frame, the rest, the review), however
+  many players there are. All calls share `DEEP_CONCURRENCY` slots.
+
+  After the review, a note held two beats or more that is still off the chord
+  is moved to the nearest chord tone (`_land_on_chords`, via `form.snap_held`).
+  Shorter dissonances, such as passing notes and one-beat suspensions, stay.
+  The listener also flags beats where several parts are outside the chord at
+  once. Each mood has its own melodic gestures (`composer.MOOD_GESTURES`), and
+  chromatic runs, which had become the reflex gesture in every mood, are found
+  (`chromatic_runs`) and sent back.
+
+  The level's difficulty applies where a part is featured (its tune, a solo).
+  Accompaniment stays clear at any level, because a quota of showy passagework
+  in every part made the texture cluttered.
 
 Deep mode takes roughly 20–110 minutes depending on ensemble size and level.
 That is longer than a proxy or browser will hold a request open, so `POST
@@ -261,7 +293,8 @@ in a background thread. The page polls `/api/compose/progress/<id>` and collects
 the piece from `/api/compose/result/<id>`. It is saved to the library either
 way, so closing the tab loses nothing. Tune it with `DEEP_PLAN_EFFORT` (default
 `high`), `DEEP_WRITE_EFFORT` (`medium`), `DEEP_REPAIR_EFFORT` (`medium`),
-`DEEP_CONCURRENCY` (`6` passages at once) and `DEEP_CALL_TIMEOUT` (`900`
+`DEEP_REVIEW_EFFORT` (`high`), `DEEP_ENSEMBLE_ROUNDS` (`1`), `DEEP_CONCURRENCY`
+(`8` calls at once) and `DEEP_CALL_TIMEOUT` (`900`
 seconds).
 
 ### Harmony, endings and balance (both modes)
@@ -316,6 +349,16 @@ of real instruments rather than a General MIDI soundfont. abcjs still reads the
 ABC into notes, with pitch, timing and dynamics. Each note is then played from
 the nearest recording, retuned, through a concert-hall reverb, with each
 transposing part played at concert pitch.
+
+Each line is shaped as a player would shape it (`shapeLine`). A new dynamic
+arrives part of the way at once and blooms the rest over about a second, even
+inside held notes, so a sudden forte grows instead of jumping and a hairpin is
+a continuous swell. Accents are a small lift on one note, not a new level.
+Notes that follow each other directly in a bowed or blown line overlap slightly
+and start without a fresh attack. Timing and level vary by a few milliseconds
+and under a decibel. The hall has a short pre-delay, early reflections and a
+tail that darkens as it decays, and a gentle high shelf takes the close-miked
+edge off the samples.
 
 Dynamics are read as levels in decibels, about 26 dB from pp to ff, and soft
 notes are also played darker through a low-pass filter. abcjs's automatic beat

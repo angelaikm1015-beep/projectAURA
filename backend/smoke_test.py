@@ -752,7 +752,7 @@ import re
 import time
 import deep
 
-for schema_name in ("PLAN_SCHEMA", "MELODY_SCHEMA", "PART_SCHEMA"):
+for schema_name in ("PLAN_SCHEMA", "MELODY_SCHEMA", "PART_SCHEMA", "REVISION_SCHEMA"):
     schema_problems = walk_schema(getattr(deep, schema_name))
     check(f"deep.{schema_name} is valid for strict Structured Outputs",
           not schema_problems, schema_problems)
@@ -781,6 +781,14 @@ def deep_answer(**kwargs):
     deep_prompts.append((name, prompt))
     if name == "deep_plan":
         return FakeCompletion(DEEP_PLAN)
+    if name == "ensemble":
+        # The review of the first passage takes the violin off the oboe's tune.
+        bars = re.search(r"^SECTION s1 .*?EXACTLY (\d+) bars", prompt, re.M)
+        revisions = [{"partId": "P1", "section": "s1",
+                      "abc": " | ".join(["z8"] * int(bars[1])) + " |",
+                      "abcLower": None}] if bars else []
+        return FakeCompletion({"critique": ["m.1: the violin crowds the oboe."],
+                               "revisions": revisions})
     if name.endswith("_fix"):
         wanted = re.findall(r"^s(\d+) — EXACTLY (\d+) bars", prompt, re.M)
     else:
@@ -822,6 +830,53 @@ first_passage = [p for p in part_prompts if ">> s1 " in p]
 check("deep: the bass is composed first, then the tune's carrier",
       "YOU ARE COMPOSING [P5]" in first_passage[0] and "YOU ARE COMPOSING [P4]" in first_passage[1],
       [re.search(r"YOU ARE COMPOSING \[(P\d)\]", p)[1] for p in first_passage])
+inner = first_passage[2:]
+check("deep: the other parts are written together, hearing the bass and the tune",
+      len(inner) == 3 and all("WRITTEN AT THE SAME TIME AS YOU" in p
+                              and "HOW IT SOUNDS TOGETHER" in p
+                              and "[P5] Piano" in p and "[P4] Oboe" in p for p in inner),
+      [p[-800:] for p in inner[:1]])
+check("  and are told where they sit among each other, high to low",
+      all(re.search(r"high to low: .*YOU", p) for p in inner))
+review_prompts = [p for n, p in deep_prompts if n == "ensemble"]
+check("deep: each passage is reviewed once as a full score",
+      len(review_prompts) == 2
+      and all("THE FULL SCORE OF THIS PASSAGE" in p and "HOW IT SOUNDS TOGETHER" in p
+              and "[P3]" in p for p in review_prompts), len(review_prompts))
+check("  and the review's revision is used",
+      deep_score["written"][0]["abc"].split("||")[0].count("z8") >= 19,
+      deep_score["written"][0]["abc"][:120])
+
+# Listening between the parts.
+import ensemble
+EAR_PLAN = {"timeSignature": "4/4",
+            "harmony": [{"measure": 1, "chord": "C"}, {"measure": 2, "chord": "G"}],
+            "_sections": [{"start": 1, "end": 2, "bars": 2, "key": "C major",
+                           "lead": "P1", "texture": "tutti"}]}
+def ear_part(pid, label):
+    return {"partId": pid, "label": label, "instrument": label, "pitched": True,
+            "staves": 1, "transpose": 0, "clef": "treble"}
+EAR_ROSTER = [ear_part("P1", "Flute"), ear_part("P2", "Viola"), ear_part("P3", "Cello")]
+heard = ensemble.listen(EAR_PLAN, EAR_ROSTER, {
+    "P1": {0: {"abc": "g4 a4 | b8 |"}}, "P2": {0: {"abc": "c4 d4 | c'8 |"}},
+    "P3": {0: {"abc": "C,4 G,,4 | G,,8 |"}}}, [0])
+check("ensemble: parallel fifths between two lines are heard",
+      any("parallel fifths" in h and "Flute" in h and "Viola" in h for h in heard), heard)
+check("  and a held semitone clash", any("semitone clash" in h for h in heard), heard)
+hollow = ensemble.listen(EAR_PLAN, EAR_ROSTER, {
+    "P1": {0: {"abc": "c8 | d8 |"}}, "P2": {0: {"abc": "G8 | G8 |"}},
+    "P3": {0: {"abc": "C,8 | G,,8 |"}}}, [0])
+check("  and a chord nobody gives its third to", any("third of C" in h for h in hollow), hollow)
+covered = ensemble.listen(EAR_PLAN, EAR_ROSTER, {
+    "P1": {0: {"abc": "c2 d2 e2 f2 | d8 |"}}, "P2": {0: {"abc": "e2 f2 g2 a2 | g8 |"}},
+    "P3": {0: {"abc": "C,8 | G,,8 |"}}}, [0])
+check("  and an accompanist sitting on top of the tune", any("covers it" in h for h in covered),
+      covered)
+grid = ensemble.score_grid(EAR_PLAN, EAR_ROSTER, {
+    "P1": {0: {"abc": "c8 | d8 |"}}, "P3": {0: {"abc": "C,8 | G,,8 |"}}}, [0])
+check("  the score is shown beat by beat at concert pitch, lowest first",
+      grid[0] == "m.1.1 [C] Cello C3, Flute C5" and grid[1] == "m.1.2 [C] Cello C3~, Flute C5~",
+      grid[:2])
 check("deep: each part is written against the melody and the parts before it",
       all("THE MELODY FOR THESE BARS" in p for p in part_prompts)
       and "PARTS ALREADY COMPOSED" not in first_passage[0]
