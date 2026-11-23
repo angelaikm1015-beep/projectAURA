@@ -175,7 +175,7 @@ def listen(plan: dict, roster: list, written: dict, run: list) -> list:
         return []
     units, beat, beats = _beats(plan)
     points = [(s, measure, at) for s, measure in _measures(plan, run) for at in beats]
-    found = {"parallel": [], "third": [], "clash": [], "mud": [], "cover": []}
+    found = {"blur": [], "parallel": [], "third": [], "clash": [], "mud": [], "cover": []}
 
     def add(kind, text):
         if len(found[kind]) < PER_KIND:
@@ -243,6 +243,20 @@ def listen(plan: dict, roster: list, written: dict, run: list) -> list:
     for k, (s, measure, at) in enumerate(points):
         flats = orchestrate._prefers_flats(s["key"])
         sounding = sorted((x[0], i, x) for i, x in enumerate(heard[k]) if x)
+        # Several parts outside the chord at the same moment: each may be a
+        # fine passing note on its own, but together the chord disappears.
+        symbol = _chord_of(plan, measure)
+        pcs = form.chord_pcs_at(symbol, at, units, beat) if symbol else None
+        if pcs and len(sounding) >= 3:
+            outside = [(p, a) for p, a, _ in sounding if p % 12 not in pcs]
+            parts = {staves[a]["partId"] for _, a in outside}
+            if len(parts) >= 2 and len(outside) * 3 >= len(sounding):
+                chord = form.chord_at(symbol, at, units, beat)
+                names = ", ".join(f"{staves[a]['label']} {note_name(p, flats)}"
+                                  for p, a in outside[:4])
+                add("blur", f"m.{measure} beat {int(at / beat) + 1}: {names} — outside "
+                            f"{chord} at the same moment; the chord disappears. Put them on "
+                            "chord tones, or let only one part pass at a time.")
         # Two held notes a semitone (or a minor ninth) apart grind.
         for i in range(len(sounding)):
             for j in range(i + 1, len(sounding)):
@@ -296,5 +310,5 @@ def listen(plan: dict, roster: list, written: dict, run: list) -> list:
                     add("cover", f"s{index + 1}: {voice['label']} doubles the soloist in "
                                  "unison — a solo is one player. Accompany instead.")
 
-    order = ("clash", "third", "parallel", "cover", "mud")
+    order = ("blur", "clash", "third", "parallel", "cover", "mud")
     return [text for kind in order for text in found[kind]][:MAX_PROBLEMS]

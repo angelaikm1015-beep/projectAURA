@@ -2244,3 +2244,97 @@ body:has(.score-shell) {
   .form-timeline__range { display: none; }
 }
 @media print { .form-timeline { display: none; } }
+
+/* ---------- instrument checkboxes ---------- */
+
+.checks { display: flex; flex-direction: column; gap: 12px; }
+
+.checks__group { border: 0; margin: 0; padding: 0; min-width: 0; }
+
+.checks__legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.checks__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.check {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 10px;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.check:hover { background: rgba(58, 60, 46, 0.07); }
+.check.is-checked { border-color: var(--accent); background: var(--accent-soft); }
+
+/* The real checkbox stays in the DOM, focusable, for keyboards and readers. */
+.check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.check:focus-within { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+.check__box {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--field-border);
+  border-radius: 4px;
+  background: var(--card);
+}
+
+.check.is-checked .check__box {
+  border-color: var(--accent);
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
+}
+
+.check__name { min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- chips: short single choices ---------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.chip {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--text);
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.chip:hover { background: rgba(58, 60, 46, 0.07); }
+.chip:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.chip.is-selected { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+
+/* The instrument toggle: two halves of one control. */
+.chips--large { gap: 0; }
+.chips--large .chip {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 0;
+  text-align: center;
+}
+.chips--large .chip:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.chips--large .chip:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -1px; }
+
+.section-title__note { font-weight: 400; color: var(--text-faint); }

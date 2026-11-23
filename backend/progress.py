@@ -11,6 +11,7 @@ waits. Nothing here is durable, because nothing here needs to outlive the
 request it describes.
 """
 
+import math
 import threading
 import time
 
@@ -61,14 +62,14 @@ MODES = {
     "light": {"order": STAGE_ORDER, "weights": STAGE_WEIGHTS, "seconds": STAGE_SECONDS,
               "labels": STAGE_LABELS},
     "deep": {
-        "order": ["planning", "melody", "writing", "engraving"],
-        "weights": {"planning": 0.06, "melody": 0.12, "writing": 0.79, "engraving": 0.03},
-        "seconds": {"planning": 240, "melody": 150, "writing": 150, "engraving": 2},
+        "order": ["planning", "solos", "writing", "engraving"],
+        "weights": {"planning": 0.16, "solos": 0.14, "writing": 0.67, "engraving": 0.03},
+        "seconds": {"planning": 240, "solos": 180, "writing": 240, "engraving": 2},
         "labels": {**STAGE_LABELS,
                    "planning": "Composing the themes, the form and every bar's harmony",
-                   "melody": "Composing the melody of the whole piece",
-                   "writing": "Composing the parts in waves, then reviewing each passage "
-                              "as a full score"},
+                   "solos": "Composing the solos, each on its own",
+                   "writing": "Writing the full score — every instrument together, "
+                              "passage by passage"},
     },
 }
 
@@ -190,9 +191,40 @@ def read(request_id: str) -> dict | None:
         # for six minutes is exactly the lie this panel exists to stop telling.
         remaining = None
 
+    overrunning = (remaining is None) or elapsed > entry["highSeconds"]
+    remaining = _steady(request_id, remaining, time.time())
     entry["remainingSeconds"] = int(remaining) if remaining and remaining > 15 else None
-    entry["overrunning"] = (remaining is None) or elapsed > entry["highSeconds"]
+    entry["overrunning"] = overrunning
     return entry
+
+
+# The projection above rises while a long call runs (time passes, nothing new
+# has finished) and drops when one lands: shown raw, "time left" goes 4 min,
+# 5, 4, 5… What is shown counts down instead. Good news is taken at once; bad
+# news is eased in over a couple of minutes, so a run that really is behind
+# still says so, but one slow call doesn't make the number jump.
+EASE_SECONDS = 120
+
+
+def _steady(request_id: str, remaining, now: float):
+    with _lock:
+        original = _entries.get(request_id)
+        if original is None:
+            return remaining
+        if remaining is None:
+            original.pop("_shown", None)
+            return None
+        shown, at = original.get("_shown"), original.get("_shownAt", now)
+        if shown is None:
+            value = remaining
+        else:
+            counted = max(0.0, shown - (now - at))
+            if remaining <= counted:
+                value = remaining
+            else:
+                value = counted + (remaining - counted) * (1 - math.exp(-(now - at) / EASE_SECONDS))
+        original["_shown"], original["_shownAt"] = value, now
+        return value
 
 
 def _fraction(entry: dict, creep: bool = True) -> float:

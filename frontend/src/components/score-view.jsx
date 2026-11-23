@@ -21,6 +21,7 @@ import abcjs from "abcjs";
 
 import { OPTIONS } from "../lib/options-data";
 import { makeTiming, notesFrom, perform, prepare } from "../lib/orchestra";
+import { fetchMusicXml } from "../lib/api";
 
 const slug = (text) =>
   String(text || "score").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -71,8 +72,8 @@ function saveFile(filename, href) {
   anchor.remove();
 }
 
-function downloadText(filename, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+function downloadText(filename, text, type = "text/plain;charset=utf-8") {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   saveFile(filename, url);
   URL.revokeObjectURL(url);
 }
@@ -792,6 +793,7 @@ function ConductorNotes({ conductor }) {
 
 export function ScoreView({
   score,
+  scoreId,
   brief,
   pending = false,
   pendingLabel = "Writing…",
@@ -813,6 +815,8 @@ export function ScoreView({
   footer,
 }) {
   const [activeId, setActiveId] = useState("full");
+  // null, "loading", or a short message if the download failed.
+  const [xmlState, setXmlState] = useState(null);
   const [tune, setTune] = useState(null);
   const [sizeId, setSizeId] = useState(DEFAULT_SIZE);
 
@@ -843,6 +847,19 @@ export function ScoreView({
     ? `${base}-full-score`
     : `${base}-${slug(active.label)}`;
 
+  async function downloadMusicXml() {
+    setXmlState("loading");
+    try {
+      const text = await fetchMusicXml(scoreId);
+      // Always the full score: MusicXML carries every part, and notation
+      // programs split it into parts themselves.
+      downloadText(`${base}-full-score.musicxml`, text, "application/vnd.recordare.musicxml+xml");
+      setXmlState(null);
+    } catch (error) {
+      setXmlState(error.message || "Couldn't prepare the MusicXML.");
+    }
+  }
+
   const facts = [
     score.tempoText,
     `${score.tempoBpm} bpm`,
@@ -855,6 +872,8 @@ export function ScoreView({
     brief?.ensemble && { label: "Ensemble", value: brief.ensemble },
     brief?.level && { label: "Level", value: brief.level },
     brief?.mood && { label: "Mood", value: brief.mood },
+    brief?.choices && { label: "You chose", value: brief.choices },
+    brief?.instrumentsBy && { label: "Instruments", value: brief.instrumentsBy },
     brief && { label: "Conductor", value: brief.conductor ? "Yes" : "No" },
   ].filter(Boolean);
 
@@ -913,6 +932,7 @@ export function ScoreView({
                 ))}
               </dl>
               {brief?.notes && <p className="score-block__sub">“{brief.notes}”</p>}
+              {brief?.ensembleWhy && <p className="score-block__sub">{brief.ensembleWhy}</p>}
             </section>
           )}
 
@@ -989,6 +1009,19 @@ export function ScoreView({
               >
                 Download MIDI
               </button>
+              {score.compact && scoreId && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-small"
+                  disabled={xmlState === "loading"}
+                  onClick={downloadMusicXml}
+                >
+                  {xmlState === "loading" ? "Preparing MusicXML…" : "Download MusicXML"}
+                </button>
+              )}
+              {xmlState && xmlState !== "loading" && (
+                <span className="score-tools__note" role="status">{xmlState}</span>
+              )}
             </div>
 
             <div className="sheet-size" role="group" aria-label="Sheet size">

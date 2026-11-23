@@ -1239,7 +1239,7 @@ def section_line(plan: dict, part: dict, section: dict, voice: str, units: Fract
 
 
 def snap_held(text: str, part: dict, chorale: dict, key: str, beat: Fraction,
-              units: Fraction) -> str:
+              units: Fraction, min_length: Fraction = None) -> str:
     """Move a hand-written line's held clashes onto the chord, and nothing else.
 
     A note that starts on a beat and lasts a beat or more, and is not sounding
@@ -1262,7 +1262,7 @@ def snap_held(text: str, part: dict, chorale: dict, key: str, beat: Fraction,
         plan, position = [], Fraction(0)
         for midi, dur in events:
             if midi is not None and not isinstance(midi, tuple) and position % beat == 0 \
-                    and dur >= beat:
+                    and dur >= (min_length or beat):
                 pcs = {m % 12 for m in (_sounding_at(chorale["voices"][v][index], position)
                                         for v in VOICES) if m is not None}
                 symbols = chorale.get("chords") or []
@@ -1683,3 +1683,48 @@ def arrive_in(chords: list, key: str) -> list:
     if _root_pc(bar_chords(chords[0])[0]) != _root_pc(tonic):
         chords[0] = tonic
     return chords
+
+
+# ---------------------------------------------------------------------------
+# Orchestral harmony: triads and sevenths
+# ---------------------------------------------------------------------------
+
+def orchestral_chord(symbol: str) -> str:
+    """A chord symbol in the harmonic language of the orchestra.
+
+    Left to itself the model writes jazz harmony — maj9, m11, 13, 6/9 in two
+    bars out of three — and when every player takes a different tone of a
+    five-note chord, an orchestra sounds like a cluster, not a chord. So every
+    chord is reduced to the triad or seventh chord it stands on: 'Gmaj9' ->
+    'Gmaj7', 'Am11' -> 'Am7', 'D13' and 'D7(b9)' -> 'D7', 'C6/9' and 'Csus2' ->
+    'C'. Diminished, half-diminished, augmented and sus4 chords, and the slash
+    bass, are kept. A bar of two chords has each reduced.
+    """
+    several = bar_chords(symbol)
+    if len(several) > 1:
+        return " ".join(orchestral_chord(one) for one in several)
+    match = CHORD_RE.match(str(symbol or ""))
+    if not match:
+        return symbol
+    root = match.group(1) + match.group(2)
+    q = match.group(3).strip()
+    low = q.lower()
+    # Added tones and alterations (6/9, add9, b9) say nothing about a seventh.
+    core = re.sub(r"6/9|69|add\d+|\(?[#b]\d+\)?", "", q)
+    seventh = bool(re.search(r"7|9|11|13", core))
+    if "ø" in q or "m7b5" in low:
+        quality = "ø7"
+    elif "dim" in low or "°" in q:
+        quality = "dim7" if seventh else "dim"
+    elif "aug" in low or "+" in q or "#5" in low:
+        quality = "aug"
+    elif "sus4" in low or (low.startswith("sus") and "sus2" not in low):
+        quality = "7sus4" if seventh else "sus4"
+    elif (q.startswith("m") and not q.startswith("maj")) or low.startswith("min"):
+        quality = "m7" if seventh else "m"
+    elif "maj" in low or "M7" in q or "Δ" in q:
+        quality = "maj7" if seventh else ""
+    else:
+        quality = "7" if seventh else ""
+    bass = f"/{match.group(4)}{match.group(5) or ''}" if match.group(4) else ""
+    return f"{root}{quality}{bass}"

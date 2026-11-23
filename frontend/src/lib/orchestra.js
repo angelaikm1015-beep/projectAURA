@@ -220,16 +220,31 @@ function sampleFor(spec, pitch) {
 /* ---------- the hall ---------- */
 
 /** A concert-hall tail: decaying stereo noise, about two seconds. */
-function hallImpulse(context, seconds = 2.2) {
+// A concert hall, synthesised: a short gap before the first reflections, a few
+// distinct early reflections off the nearby walls, then a tail that decays
+// over about two seconds and grows darker as it goes, the way air and seats
+// absorb the high frequencies first. Each ear gets its own noise, so the
+// room is wide rather than a mono wash.
+const PRE_DELAY = 0.018;
+const EARLY = [[0.021, 0.55], [0.033, 0.42], [0.047, 0.35], [0.061, 0.28], [0.079, 0.22]];
+
+function hallImpulse(context, seconds = 2.4) {
   const rate = context.sampleRate;
   const length = Math.floor(rate * seconds);
   const impulse = context.createBuffer(2, length, rate);
   for (let channel = 0; channel < 2; channel += 1) {
     const data = impulse.getChannelData(channel);
-    for (let i = 0; i < length; i += 1) {
-      const t = i / rate;
-      const early = t < 0.012 ? 0 : 1;
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 3.2) * early;
+    let smooth = 0;
+    for (let i = Math.floor(PRE_DELAY * rate); i < length; i += 1) {
+      const progress = i / length;
+      // The filter closes as the tail ages: bright at first, dark at the end.
+      const openness = 0.9 - 0.8 * progress;
+      smooth += openness * ((Math.random() * 2 - 1) - smooth);
+      data[i] = smooth * Math.exp(-6.2 * progress) * 0.6;
+    }
+    for (const [time, size] of EARLY) {
+      const at = Math.floor((time + (channel ? 0.004 : 0)) * rate);
+      if (at < length) data[at] += size * (channel ? 0.9 : 1);
     }
   }
   return impulse;
@@ -243,8 +258,14 @@ function hall(context) {
   const compressor = context.createDynamicsCompressor();
   const master = context.createGain();
   reverb.buffer = hallImpulse(context);
-  dry.gain.value = 0.82;
-  wet.gain.value = 0.32;
+  dry.gain.value = 0.8;
+  wet.gain.value = 0.36;
+  // Close-miked samples are brighter than an audience hears: a gentle shelf
+  // takes the edge off the top, as distance would.
+  const air = context.createBiquadFilter();
+  air.type = "highshelf";
+  air.frequency.value = 6500;
+  air.gain.value = -3;
   // Only a safety limiter for the loudest tuttis: a compressor working all
   // the time would lift the quiet passages and flatten the dynamics.
   compressor.threshold.value = -6;
@@ -252,9 +273,9 @@ function hall(context) {
   compressor.ratio.value = 12;
   compressor.attack.value = 0.003;
   compressor.release.value = 0.3;
-  input.connect(dry).connect(compressor);
-  input.connect(reverb).connect(wet).connect(compressor);
-  compressor.connect(master).connect(context.destination);
+  input.connect(dry).connect(air);
+  input.connect(reverb).connect(wet).connect(air);
+  air.connect(compressor).connect(master).connect(context.destination);
   return { input, master };
 }
 
@@ -287,6 +308,109 @@ export function loudness(velocity) {
     gain: Math.pow(10, (db0 + (db1 - db0) * t) / 20),
     brightness: hz0 * Math.pow(hz1 / hz0, t),
   };
+}
+
+/* ---------- shaping a line ---------- */
+
+// A written change of dynamic is a change in how the player plays, not a
+// volume knob: even a subito f takes a moment to bloom, and a crescendo
+// grows through the notes. So each line's level moves toward what is written
+// over about a second (a little faster getting softer), within held notes too.
+const RISE_SECONDS = 0.9;
+const FALL_SECONDS = 0.55;
+// An accent lifts one note; it is not a new dynamic, and is kept small.
+const ACCENT_DB = 2.5;
+// How much of a new dynamic arrives at once, and how long a silence makes the
+// next note an entry (at its written level straight away).
+const COMMIT = 0.4;
+const ENTRY_GAP = 0.25;
+// Notes this close together in one line are joined: bowed and blown notes
+// overlap slightly instead of stopping and restarting.
+const LEGATO_GAP = 0.03;
+const LEGATO_OVERLAP = 0.05;
+// …but never by more than this share of the note: on fast notes a fixed
+// overlap smears every note into the next, which is what made runs sound dirty.
+const LEGATO_SHARE = 0.15;
+// A bowed or blown note rings on after it is let go for up to its instrument's
+// release, but no longer than this share of its own length (plus a little):
+// a sixteenth's tail mustn't sound under the next three notes.
+const RELEASE_SHARE = 0.5;
+const RELEASE_FLOOR = 0.06;
+const LEGATO_ATTACK = 0.07;
+// Players are not a sequencer: a few milliseconds and a fraction of a decibel.
+const HUMAN_SECONDS = 0.007;
+const HUMAN_DB = 0.8;
+
+function median(a, b, c) {
+  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+}
+
+/** A repeatable "random" number in [-1, 1] for a note, so a replay is identical. */
+function jitter(voice, index, salt) {
+  const x = Math.sin(voice * 127.1 + index * 311.7 + salt * 74.7) * 43758.5453;
+  return (x - Math.floor(x)) * 2 - 1;
+}
+
+const toDb = (gain) => 20 * Math.log10(Math.max(gain, 1e-6));
+const fromDb = (db) => Math.pow(10, db / 20);
+
+/**
+ * One line's notes, in time order, shaped as a player would: the written level
+ * approached smoothly, accents as small lifts, connected notes joined.
+ * Each note gets `gain` (where it starts) and `target` (where it is heading).
+ */
+function shapeLine(line, velocities, sustained) {
+  // Separate a one-note spike (an accent) from a real change of dynamic: the
+  // dynamic is the median of the note and its neighbours.
+  const written = velocities.map((v, i) =>
+    median(velocities[i - 1] ?? v, v, velocities[i + 1] ?? v));
+  // `level` is where the player is; between notes it keeps moving toward the
+  // level of the note before. A new dynamic starts part of the way there at
+  // once (the player commits to it) and grows the rest of the way. After a
+  // rest, the entry is simply at its written level.
+  let level = null;
+  let heading = null;
+  let lastStart = 0;
+  let lastEnd = 0;
+  line.forEach((note, i) => {
+    const target = toDb(loudness(written[i]).gain);
+    if (level === null || note.start - lastEnd > ENTRY_GAP) {
+      level = target;
+    } else {
+      const dt = Math.max(0, note.start - lastStart);
+      const tau = heading > level ? RISE_SECONDS : FALL_SECONDS;
+      level = heading + (level - heading) * Math.exp(-dt / tau);
+      if (Math.abs(target - level) > 1) level += COMMIT * (target - level);
+    }
+    heading = target;
+    lastStart = note.start;
+    lastEnd = Math.max(lastEnd, note.end);
+    const lift = velocities[i] > written[i] + 4 ? ACCENT_DB : 0;
+    const human = jitter(note.voice, i, 1) * HUMAN_DB;
+    note.gain *= fromDb(level + lift + human);
+    note.target = note.gain * fromDb(target - level);
+    note.tau = target > level ? RISE_SECONDS : FALL_SECONDS;
+    note.brightness = loudness(written[i]).brightness * (lift ? 1.25 : 1);
+    note.start = Math.max(0, note.start + jitter(note.voice, i, 2) * HUMAN_SECONDS);
+  });
+  if (!sustained) return;
+  // Legato: a note that the next one follows directly runs into it, and the
+  // next one starts without a fresh attack.
+  const joined = new Set();
+  for (let i = 0; i < line.length; i += 1) {
+    const note = line[i];
+    for (let j = i + 1; j < line.length && line[j].start < note.end + LEGATO_GAP; j += 1) {
+      if (line[j].start > note.start + 0.01 && Math.abs(line[j].start - note.end) < LEGATO_GAP) {
+        note.end = line[j].start
+          + Math.min(LEGATO_OVERLAP, (line[j].start - note.start) * LEGATO_SHARE);
+        joined.add(j);
+        break;
+      }
+    }
+  }
+  joined.forEach((j) => {
+    line[j].attack = Math.min(LEGATO_ATTACK, (line[j].end - line[j].start) * 0.3);
+  });
 }
 
 /* ---------- the ending ---------- */
@@ -340,6 +464,8 @@ export function notesFrom(sequence, voices, timing, meterSize, ensembleSize) {
       .sort((a, b) => a - b);
     const level = (spec.balance ?? 1)
       * (KEYBOARDS.has(voice.instrument) && ensembleSize > 2 ? ACCOMPANYING_KEYBOARD : 1);
+    const line = [];
+    const velocities = [];
 
     for (const event of track) {
       if (event.cmd !== "note" || !(event.duration > 0)) continue;
@@ -348,8 +474,8 @@ export function notesFrom(sequence, voices, timing, meterSize, ensembleSize) {
       const start = timing.toSeconds(startBar);
       let end = timing.toSeconds(endBar);
       if (startBar >= timing.finalBar - 1e-6) end = start + (end - start) * FERMATA;
-      const { gain, brightness } = loudness(event.volume ?? 80);
-      notes.push({
+      velocities.push(Math.max(0, Math.min(127, event.volume ?? 80)));
+      line.push({
         voice: index,
         instrument: voice.instrument,
         spec,
@@ -357,11 +483,12 @@ export function notesFrom(sequence, voices, timing, meterSize, ensembleSize) {
         hit: spec.hits ? (event.pitch === pitches[0] ? "low" : "high") : null,
         start,
         end: Math.max(end, start + 0.05),
-        gain: level * gain,
-        brightness,
+        gain: level,
         pan: spec.pan ?? 0,
       });
     }
+    shapeLine(line, velocities, !spec.ring);
+    notes.push(...line);
   });
   return notes.sort((a, b) => a.start - b.start);
 }
@@ -423,7 +550,11 @@ export async function perform(context, notes, offset = 0) {
       next += 1;
       const at = t0 + note.start;
       const until = t0 + note.end;
-      const { attack = 0.01, release = 0.3 } = note.spec;
+      const length = note.end - note.start;
+      const release = note.spec.ring
+        ? (note.spec.release ?? 0.3)
+        : Math.min(note.spec.release ?? 0.3, RELEASE_FLOOR + length * RELEASE_SHARE);
+      const attack = note.attack ?? note.spec.attack ?? 0.01;
       const source = context.createBufferSource();
       source.buffer = buffer;
       source.playbackRate.value = rate;
@@ -431,9 +562,13 @@ export async function perform(context, notes, offset = 0) {
       const peak = note.gain * trim;
       gain.gain.setValueAtTime(0, at);
       gain.gain.linearRampToValueAtTime(peak, at + attack);
+      // Through the note, the level keeps moving toward what is written, so
+      // a crescendo or a new dynamic grows rather than jumps.
+      if (note.target !== undefined && Math.abs(note.target - note.gain) > 1e-4) {
+        gain.gain.setTargetAtTime(note.target * trim, at + attack, note.tau || RISE_SECONDS);
+      }
       // Struck and plucked sounds decay on their own; held ones are let go
       // when the note ends.
-      gain.gain.setValueAtTime(peak, until);
       gain.gain.setTargetAtTime(0, until, release / 3);
       if (note.brightness && note.brightness < 17000) {
         const tone = context.createBiquadFilter();

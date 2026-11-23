@@ -751,64 +751,79 @@ check("a rejected API key is explained, not retried into a generic failure",
 import re
 import time
 import deep
+import compact
+import musicxml
+import xml.etree.ElementTree as ElementTree
+from fractions import Fraction
 
-for schema_name in ("PLAN_SCHEMA", "MELODY_SCHEMA", "PART_SCHEMA", "REVISION_SCHEMA"):
-    schema_problems = walk_schema(getattr(deep, schema_name))
+for schema_name, schema in (("PLAN_SCHEMA", deep.PLAN_SCHEMA),
+                            ("passage_schema", deep.passage_schema(ROSTER))):
+    schema_problems = walk_schema(schema)
     check(f"deep.{schema_name} is valid for strict Structured Outputs",
           not schema_problems, schema_problems)
 
 DEEP_PLAN = {
     "title": "Deep Test", "tempoText": "Allegro", "tempoBpm": 120, "beatUnit": "1/4",
     "timeSignature": "4/4", "concertKey": "C major",
-    "themes": [{"id": "A", "abc": "C2 E2 G2 c2 | c8 |", "description": "Rising."}],
+    "themes": [{"id": "A", "measures": ["C4:4 E4:4 G4:4 C5:4", "C5:1"], "chords": ["C", "C"],
+                "description": "Rising."}],
     "sections": [
         {"label": "A", "bars": 20, "key": "C major", "chords": ["C"] * 18 + ["C F", "C"],
-         "dynamic": "p", "lead": "P4", "material": "A", "orchestration": "oboe tune"},
+         "dynamic": "p", "lead": "P4", "mainTheme": True, "texture": "tutti",
+         "accompaniment": "sustained", "material": "A", "orchestration": "oboe tune"},
         {"label": "B", "bars": 16, "key": "G major", "chords": ["C"], "dynamic": "f",
-         "lead": None, "material": "A fragments", "orchestration": "tutti"},
+         "lead": None, "mainTheme": False, "texture": "tutti", "accompaniment": "repeated",
+         "material": "A fragments", "orchestration": "tutti"},
         {"label": "Coda", "bars": 4, "key": "D major", "chords": ["C", "C", "C", "C"],
-         "dynamic": "mf", "lead": None, "material": "close", "orchestration": "tutti"},
+         "dynamic": "mf", "lead": None, "mainTheme": False, "texture": "reduced",
+         "accompaniment": "sustained", "material": "close", "orchestration": "tutti"},
     ],
     "partRoles": [{"partId": "P1", "role": "Leads the strings."}],
     "programNote": "A test.", "rehearsalTips": "Count.", "conductor": None,
 }
 deep_calls, deep_prompts = [], []
 
+# What each stand-in player writes: a C-major chord shared out, and two slips
+# for the engraver to repair — a short bar and a note out of range.
+FAKE_LINES = {"P1": "@mf G4:2 E4:2", "P2": "@mf E4:2 C4:2", "P3": "@mf C4:1",
+              "P4": "@mf E5:4 D5:4 C5:4 E5:4", "P5": "@mf C4+E4+G4:1"}
+
+
+# A solo's first draft leaps about in equal notes; asked again, it sings.
+LEAPING = "C4:4 B4:4 C4:4 B4:4"
+SINGING = ["@p E5:4( D5:4 C5:4 D5:4)", "E5:2 G5:2", "A5:4( G5:4 F5:4 E5:4)", "D5:2. r:4",
+           "C5:4( D5:4 E5:4 F5:4)", "G5:2 E5:2", "D5:4( C5:4 D5:4 B4:4)", "C5:1"]
+deep_plan_now = [DEEP_PLAN]
+
+
 def deep_answer(**kwargs):
     name = kwargs["response_format"]["json_schema"]["name"]
     prompt = kwargs["messages"][1]["content"]
     deep_calls.append(name)
-    deep_prompts.append((name, prompt))
+    deep_prompts.append((name, prompt, kwargs["messages"][0]["content"]))
     if name == "deep_plan":
-        return FakeCompletion(DEEP_PLAN)
-    if name == "ensemble":
-        # The review of the first passage takes the violin off the oboe's tune.
-        bars = re.search(r"^SECTION s1 .*?EXACTLY (\d+) bars", prompt, re.M)
-        revisions = [{"partId": "P1", "section": "s1",
-                      "abc": " | ".join(["z8"] * int(bars[1])) + " |",
-                      "abcLower": None}] if bars else []
-        return FakeCompletion({"critique": ["m.1: the violin crowds the oboe."],
-                               "revisions": revisions})
-    if name.endswith("_fix"):
-        wanted = re.findall(r"^s(\d+) — EXACTLY (\d+) bars", prompt, re.M)
-    else:
-        asked = prompt.split("COMPOSE THE MELODY NOW" if name == "melody"
-                             else "YOU ARE COMPOSING")[1]
-        wanted = re.findall(r"^SECTION s(\d+) .*?EXACTLY (\d+) bars", asked, re.M)
-    pid = (re.search(r"Use partId (P\d+)", prompt) or [None, None])[1]
+        return FakeCompletion(deep_plan_now[0])
+    if name == "solo":
+        soloist = re.search(r"WRITE THE SOLO for .*? \[(P\d)\]", prompt)[1]
+        bars = int(re.search(r"EXACTLY (\d+) measures", prompt)[1])
+        line = ([LEAPING] * bars if "YOUR FIRST VERSION" not in prompt
+                else (SINGING * bars)[:bars])
+        return FakeCompletion({"shape": "Two phrases.", "parts": [
+            {"partId": soloist, "measures": line, "lower": []},
+            {"partId": "P5", "measures": ["@pp C3+G3:1"] * bars, "lower": ["C2:1"] * bars}]})
     sections = []
-    for number, bars in wanted:
-        bars = int(bars)
-        line = ["!mf! C2 E2 G2 c2"] * bars
-        if int(number) == 3:
-            line[-1] = "c8"                      # the closing chord, held
-        if name == "part" and pid == "P4" and number == "1":
-            line[0] = "C2 E2 G2"                 # a short bar for the review to catch
-        sections.append({"section": f"s{number}", "abc": " | ".join(line) + " |",
-                         "abcLower": " | ".join(["C,8"] * bars) + " |" if pid == "P5" else None})
-    if name.startswith("melody"):
-        return FakeCompletion({"sections": sections})
-    return FakeCompletion({"partId": pid, "sections": sections, "performanceNote": "Play."})
+    for number, bars in re.findall(r"^SECTION s(\d+) .*?EXACTLY (\d+) measures", prompt, re.M):
+        parts = []
+        for pid, line in FAKE_LINES.items():
+            measures = [line] * int(bars)
+            if pid == "P4" and number == "1":
+                measures[0] = "E5:4 D5:4 C5:4"          # a beat short
+            if pid == "P2" and number == "1":
+                measures[1] = "C8:1"                    # out of the violin's range
+            parts.append({"partId": pid, "measures": measures,
+                          "lower": ["C3:1"] * int(bars) if pid == "P5" else []})
+        sections.append({"section": f"s{number}", "parts": parts})
+    return FakeCompletion({"sections": sections})
 
 deep_client = mock.Mock()
 deep_client.chat.completions.create.side_effect = deep_answer
@@ -816,36 +831,230 @@ deep_request = {**COMPOSE, "mode": "deep", "conductor": False}
 with mock.patch.object(composer, "client", return_value=deep_client):
     deep_score = deep.compose(deep_request)
 
-check("deep: plan, then the melody, then the parts, with a correction",
-      deep_calls[0] == "deep_plan" and deep_calls[1] == "melody"
-      and deep_calls.index("part") > max(i for i, n in enumerate(deep_calls) if n == "melody")
-      and "part_fix" in deep_calls, deep_calls)
 # 20 + 16 bars don't fit one 32-bar passage: two passages, the coda with the B section.
-check("deep: the melody is written passage by passage, in order",
-      deep_calls.count("melody") == 2, deep_calls.count("melody"))
-check("deep: every part is written on its own, once per passage",
-      deep_calls.count("part") == 2 * len(ROSTER), deep_calls.count("part"))
-part_prompts = [p for n, p in deep_prompts if n == "part"]
-first_passage = [p for p in part_prompts if ">> s1 " in p]
-check("deep: the bass is composed first, then the tune's carrier",
-      "YOU ARE COMPOSING [P5]" in first_passage[0] and "YOU ARE COMPOSING [P4]" in first_passage[1],
-      [re.search(r"YOU ARE COMPOSING \[(P\d)\]", p)[1] for p in first_passage])
-inner = first_passage[2:]
-check("deep: the other parts are written together, hearing the bass and the tune",
-      len(inner) == 3 and all("WRITTEN AT THE SAME TIME AS YOU" in p
-                              and "HOW IT SOUNDS TOGETHER" in p
-                              and "[P5] Piano" in p and "[P4] Oboe" in p for p in inner),
-      [p[-800:] for p in inner[:1]])
-check("  and are told where they sit among each other, high to low",
-      all(re.search(r"high to low: .*YOU", p) for p in inner))
-review_prompts = [p for n, p in deep_prompts if n == "ensemble"]
-check("deep: each passage is reviewed once as a full score",
-      len(review_prompts) == 2
-      and all("THE FULL SCORE OF THIS PASSAGE" in p and "HOW IT SOUNDS TOGETHER" in p
-              and "[P3]" in p for p in review_prompts), len(review_prompts))
-check("  and the review's revision is used",
-      deep_score["written"][0]["abc"].split("||")[0].count("z8") >= 19,
-      deep_score["written"][0]["abc"][:120])
+check("deep: one plan, then one call per passage for the whole orchestra",
+      deep_calls == ["deep_plan", "passage", "passage"], deep_calls)
+passage_prompt = next(p for n, p, _ in deep_prompts if n == "passage" and ">> s1 " in p)
+system_prompt = next(s for n, _, s in deep_prompts if n == "passage")
+check("deep: a passage call writes every instrument together",
+      passage_prompt.startswith("WRITE THE FULL SCORE")
+      and all(f"[{pid}]" in passage_prompt for pid in FAKE_LINES), passage_prompt[:300])
+check("  in the compact notation at sounding pitch, not ABC",
+      "MEASURE NOTATION" in passage_prompt and "SOUNDING" in passage_prompt
+      and "L:1/8" not in passage_prompt and "ABC notation." not in system_prompt)
+check("  with the harmony, the accompaniment type and the blend first, the format last",
+      passage_prompt.index("harmony:") < passage_prompt.index("HOW THE ORCHESTRA SOUNDS")
+      < passage_prompt.index("MEASURE NOTATION") < passage_prompt.index("HARD RULES")
+      and "accompaniment sustained" in passage_prompt and "One sound, not many" in passage_prompt)
+check("  and each part's sounding range and how many notes it can play at once",
+      "[P4] Oboe:" in passage_prompt and "one note at a time" in passage_prompt
+      and "GRAND STAFF" in passage_prompt)
+
+check("deep: every part is the whole piece",
+      all(composer.abc_check.bar_count(p["abc"]) == 40 for p in deep_score["written"]),
+      [composer.abc_check.bar_count(p["abc"]) for p in deep_score["written"]])
+check("deep: the engraver repaired the slips without asking again",
+      deep_score["repairs"] >= 2 and not deep_score["warnings"],
+      (deep_score["repairs"], deep_score["warnings"]))
+check("deep: piano gets its own left hand",
+      next(p for p in deep_score["written"] if p["partId"] == "P5")["abcLower"]
+      .startswith("C,8"), next(p for p in deep_score["written"] if p["partId"] == "P5")["abcLower"][:40])
+violin = deep_score["written"][0]["abc"]
+check("deep: double bar where each new section starts",
+      violin.count("||") == 2, violin[:200])
+check("deep: score says how it was made", deep_score["mode"] == "deep")
+check("deep: two chords may share a bar",
+      any(h["chord"] == "C F" for h in deep_score["harmony"]), deep_score["harmony"][16:20])
+check("deep: the piece closes V7 - I in the home key",
+      [h["chord"] for h in deep_score["harmony"][-2:]] == ["C G7", "C"]
+      and violin.count("[K:") == 2, deep_score["harmony"][-2:])
+deep_chords = [h["chord"] for h in deep_score["harmony"]]
+check("deep: a key change is led into by ii - V7 and lands on the new tonic",
+      deep_chords[19] == "Am7 D7" and deep_chords[20] == "G" and deep_chords[35] == "Dm7 G7",
+      deep_chords[18:22] + deep_chords[34:37])
+check("deep: rit. over the last two bars and a held final chord",
+      '"^rit."' in violin and "!fermata!" in violin.split("||")[-1], violin[-80:])
+check("deep: under the oboe's tune the violins are a step quieter",
+      "!pp!" in violin.split("||")[0] and "!mf!" not in violin.split("||")[0], violin[:120])
+piano = next(p for p in deep_score["written"] if p["partId"] == "P5")["abc"]
+check("deep: an orchestral piano's dynamics are softened", "!mf!" not in piano and "!p!" in piano,
+      piano[:80])
+check("deep: harmony and sections cover the piece",
+      len(deep_score["harmony"]) == 40 and deep_score["sections"][2]["fromMeasure"] == 37,
+      deep_score["sections"])
+
+oboe_bars = next(p for p in deep_score["compact"]["parts"] if p["partId"] == "P4")["upper"]
+check("deep: the main theme is written into the lead exactly, in its singing register",
+      oboe_bars[:2] == ["@p C5:4 E5:4 G5:4 C6:4", "C6:1"], oboe_bars[:3])
+check("  and the passage writer is told it is already written",
+      "THE MAIN THEME — ALREADY WRITTEN" in passage_prompt)
+
+# A piece with a solo: composed on its own, checked, sent back once, written in.
+deep_plan_now[0] = {**DEEP_PLAN, "sections": [
+    {**DEEP_PLAN["sections"][0], "bars": 8, "chords": ["C"] * 8, "lead": "P1"},
+    {**DEEP_PLAN["sections"][1], "bars": 8, "key": "C major", "chords": ["C"] * 8,
+     "texture": "solo", "lead": "P4", "dynamic": "p", "material": "A, sung by the oboe"},
+    {**DEEP_PLAN["sections"][2], "bars": 8, "chords": ["C"] * 8}]}
+deep_calls.clear(); deep_prompts.clear()
+with mock.patch.object(composer, "client", return_value=deep_client):
+    solo_score = deep.compose(deep_request)
+check("deep: a solo is composed on its own before the score, and sent back once for its faults",
+      deep_calls[:3] == ["deep_plan", "solo", "solo"] and deep_calls.count("passage") >= 1
+      and "WHAT IS WRONG WITH IT" in deep_prompts[2][1]
+      and "Awkward leaps" in deep_prompts[2][1], deep_calls)
+solo_prompt = deep_prompts[1][1]
+check("  with the melodic rules, the soloist's singing register and Berlioz on its voice",
+      "WRITING THE SOLO" in solo_prompt and "singing register" in solo_prompt
+      and ("[Berlioz, " in solo_prompt or not rag.CORPUS.exists()))
+solo_passage = next(p for n, p, _ in deep_prompts if n == "passage" and ">> s2 " in p)
+check("  the passage writer leads into it and writes R there",
+      "ALREADY WRITTEN — this section is a SOLO" in solo_passage)
+solo_parts = {p["partId"]: p for p in solo_score["compact"]["parts"]}
+check("  and the rewritten solo is in the score, with the others resting under it",
+      "@p E5:4( D5:4 C5:4 D5:4)" in solo_parts["P4"]["upper"][8]
+      and all(solo_parts[pid]["upper"][9] == "R" for pid in ("P1", "P2", "P3"))
+      and '"^solo"' in next(w for w in solo_score["written"] if w["partId"] == "P4")["abc"],
+      solo_parts["P4"]["upper"][8:10])
+
+import features
+import melody
+SOLO_PLAN = {"measureCount": 64, "_sections": [
+    {"start": 1, "end": 16, "bars": 16, "texture": "tutti", "lead": "P1", "dynamic": "f",
+     "material": "A", "key": "C major"},
+    {"start": 17, "end": 24, "bars": 8, "texture": "reduced", "lead": None, "dynamic": "f",
+     "material": "B", "key": "C major"},
+    {"start": 25, "end": 64, "bars": 40, "texture": "tutti", "lead": "P1", "dynamic": "ff",
+     "material": "A", "key": "C major"}]}
+features.place_solos(SOLO_PLAN, ROSTER, "intermediate")
+middle = SOLO_PLAN["_sections"][1]
+check("features: a piece without a solo gets one, for a singing instrument, softly",
+      middle["texture"] == "solo" and middle["lead"] == "P4" and middle["dynamic"] == "mp",
+      middle)
+leapy = [compact.read_measure("C4:4 B4:4 C4:4 B4:4", Fraction(8))[0]] * 4
+check("melody: leaps of a seventh, no steps, a repeated top note, equal values — all named",
+      len(melody.critique(leapy, 1, "Woodwinds", ["C"] * 4, Fraction(8), Fraction(2))) >= 4)
+sung = [compact.read_measure(m, Fraction(8))[0] for m in SINGING]
+check("  a singing line passes", not melody.critique(sung, 1, "Woodwinds", ["C"] * 8,
+                                                     Fraction(8), Fraction(2)),
+      melody.critique(sung, 1, "Woodwinds", ["C"] * 8, Fraction(8), Fraction(2)))
+
+stored = deep_score["compact"]
+check("deep: the final notes are stored compact, every part, every bar",
+      len(stored["parts"]) == 5 and all(len(p["upper"]) == 40 for p in stored["parts"])
+      and len(next(p for p in stored["parts"] if p["partId"] == "P5")["lower"]) == 40,
+      [len(p["upper"]) for p in stored["parts"]])
+xml_text = musicxml.build(stored, ROSTER)
+tree = ElementTree.fromstring(xml_text.split("\n", 2)[2])
+check("deep: the stored piece becomes real MusicXML, every part every measure",
+      tree.tag == "score-partwise" and len(tree.findall("part")) == 5
+      and all(len(part.findall("measure")) == 40 for part in tree.findall("part")),
+      [len(part.findall("measure")) for part in tree.findall("part")])
+check("  with key changes, a fermata on the last chord, slurs and dynamics where written",
+      len(tree.find("part").findall("measure/attributes/key")) == 3
+      and tree.find("part").findall("measure")[-1].find("note/notations/fermata") is not None
+      and tree.find("part/measure/direction/direction-type/dynamics") is not None)
+
+# The download: built from the stored notes, for whoever may see the piece.
+import library as library_for_xml
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
+     mock.patch.object(library_for_xml, "get",
+                       return_value={"score": deep_score, "brief": deep_request, "mine": True}):
+    r = client.get("/api/scores/piece-1/musicxml", headers=AUTHED)
+check("GET /api/scores/<id>/musicxml -> a MusicXML file to download",
+      r.status_code == 200 and b"<score-partwise" in r.data
+      and "attachment" in r.headers.get("Content-Disposition", ""), r.status_code)
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
+     mock.patch.object(library_for_xml, "get",
+                       return_value={"score": {"title": "Old"}, "brief": COMPOSE, "mine": True}):
+    r = client.get("/api/scores/piece-2/musicxml", headers=AUTHED)
+check("  a piece without stored notes says so", r.status_code == 404
+      and "MusicXML" in r.json["message"], r.status_code)
+
+# Orchestral harmony: triads and sevenths, never jazz chords.
+check("harmony: jazz chords are reduced to the triad or seventh they stand on",
+      [form_mod.orchestral_chord(c) for c in ("Gmaj9", "Am11 D13", "C6/9", "Fadd9", "D7(b9)",
+                                              "Asus2", "F#ø7", "Bdim7", "Esus4", "G7/B")]
+      == ["Gmaj7", "Am7 D7", "C", "F", "D7", "A", "F#ø7", "Bdim7", "Esus4", "G7/B"])
+plan_prompt = next(p for n, p, _ in deep_prompts if n == "deep_plan")
+check("  and the planner and the writer are told so, with the orchestra as one sound",
+      "No jazz chords" in plan_prompt and "Most bars are" in plan_prompt
+      and "ONE sound" in passage_prompt and "Legato is the orchestra's normal sound" in passage_prompt)
+accomp = [compact.read_measure("D4:8 E4:8 F4:4 G4:4 A4:8 G4:8", Fraction(8))[0]]
+compact.land_on_chords(accomp, ["C"], "C major", Fraction(2), Fraction(8), Fraction(1, 4))
+check("  an accompaniment note on the beat is the chord, however short; between beats it may pass",
+      compact.to_compact(accomp[0]) == "C4:8 E4:8 E4:4 G4:4 G4:8 G4:8",
+      compact.to_compact(accomp[0]))
+
+# Fast notes are merged: an accompaniment no faster than eighths, a tune no
+# faster than sixteenths. Dotted figures stay.
+busy = compact.read_measure("C4:16 D4:16 E4:16 F4:16 G4:8. A4:16 B4:4 C5:4", Fraction(8))[0]
+check("compact: runs faster than the grid become one note per step; dotted figures stay",
+      compact.thin(busy, Fraction(1)) == 2
+      and compact.to_compact(busy) == "C4:8 E4:8 G4:8. A4:16 B4:4 C5:4", compact.to_compact(busy))
+
+# The orchestration textbooks (rag/processed), where they are installed.
+import rag
+if rag.CORPUS.exists():
+    found = rag.search("harmony chord distribution doubling combined groups strings wood wind",
+                       instruments=["violin", "flute"], topics=rag.HARMONY, source="rimsky")
+    check("rag: a harmony question finds Rimsky-Korsakov's chapters on orchestrating",
+          found and found[0]["chapter"].startswith(("Chapter III", "Chapter IV", "Chapter II")),
+          [c["id"] for c in found])
+    check("  and the instrument carrying the tune gets Berlioz on how it sings",
+          rag.voice_of("Violin")["section"] == "The Violin" and rag.voice_of("Trumpet") is None)
+    check("  the passages reach the plan and every passage call",
+          "FROM THE ORCHESTRATION TEXTBOOKS" in plan_prompt
+          and "FROM THE ORCHESTRATION TEXTBOOKS" in passage_prompt
+          and "[musical example" not in passage_prompt)
+else:
+    print("SKIP  rag tests: no corpus at", rag.CORPUS)
+
+# The compact notation itself.
+CLARINET = {"partId": "P9", "label": "Clarinet", "instrument": "Clarinet", "pitched": True,
+            "staves": 1, "transpose": -2, "clef": "treble", "fullRange": "E3-C6",
+            "easyRange": "G3-G5"}
+VLN = {"partId": "P8", "label": "Violin", "instrument": "Violin", "pitched": True, "staves": 1,
+       "transpose": 0, "clef": "treble", "fullRange": "G3-A6", "easyRange": "G3-D5"}
+bars, fixed = compact.read_part(["@p C4:4( D4:8 E4:8 F#4:4 G4:4)", "G4+B4+D5:2. r:4",
+                                 "E5:2~ E5:8 D5:8 C5:4", "C9:1", "D4:4 E4:4 F4:4 G4:4 A4:4",
+                                 "C4:2~ D4:2"], 6, VLN, Fraction(8))
+check("compact: bars that don't add up, chords too big, notes out of range, bad ties — repaired",
+      fixed == 4 and [compact.to_compact(b) for b in bars][1:5]
+      == ["G4+D5:2. r:4", "E5:2~ E5:8 D5:8 C5:4", "C6:1", "D4:4 E4:4 F4:4 G4:4"]
+      and not bars[5][0].tie, (fixed, [compact.to_compact(b) for b in bars]))
+check("  and the written key's signature decides the accidentals",
+      compact.render_bar(bars[0], VLN, "G").startswith("!p!(C2 D E F2 G2)"),
+      compact.render_bar(bars[0], VLN, "G"))
+clarinet, _ = compact.read_part(["@mf C4:4 E4:4 G4:4 Bb4:4", "F#4:2 Eb4:2"], 2, CLARINET,
+                                Fraction(8))
+check("  a B-flat clarinet reads a tone higher, spelled by interval",
+      compact.render_abc(clarinet, CLARINET, [{"start": 1, "end": 2, "bars": 2,
+                                               "key": "F major"}])
+      == ("!mf!D2 F2 A2 c2 | ^G4 =F4 |]", "G"),
+      compact.render_abc(clarinet, CLARINET, [{"start": 1, "end": 2, "bars": 2,
+                                               "key": "F major"}]))
+check("  the stored form reads back exactly",
+      all(compact.to_compact(compact.read_measure(compact.to_compact(b), Fraction(8))[0])
+          == compact.to_compact(b) for b in bars))
+clarinet_xml = musicxml.build({"units": "8", "timeSignature": "4/4", "title": "T",
+                               "tempoText": "Andante", "tempoBpm": 72,
+                               "sections": [{"start": 1, "end": 2, "bars": 2,
+                                             "key": "F major", "label": "A"}],
+                               "parts": [{"partId": "P9",
+                                          "upper": [compact.to_compact(b) for b in clarinet],
+                                          "lower": []}]}, [CLARINET])
+clarinet_tree = ElementTree.fromstring(clarinet_xml.split("\n", 2)[2])
+check("  and in MusicXML it is written pitch with a transposition",
+      clarinet_tree.find("part/measure/attributes/transpose/chromatic").text == "-2"
+      and clarinet_tree.find("part/measure/attributes/key/fifths").text == "1"
+      and clarinet_tree.find("part/measure/note/pitch/step").text == "D")
+held = [compact.read_measure("F4:4 E4:4 F4:2", Fraction(8))[0],
+        compact.read_measure("B3:1", Fraction(8))[0]]
+compact.land_on_chords(held, ["C", "C"], "C major", Fraction(2), Fraction(8), Fraction(4))
+check("compact: a long note off the chord lands on it; a short one stays",
+      [compact.to_compact(b) for b in held] == ["F4:4 E4:4 E4:2", "C4:1"],
+      [compact.to_compact(b) for b in held])
+
 
 # Listening between the parts.
 import ensemble
@@ -872,82 +1081,16 @@ covered = ensemble.listen(EAR_PLAN, EAR_ROSTER, {
     "P3": {0: {"abc": "C,8 | G,,8 |"}}}, [0])
 check("  and an accompanist sitting on top of the tune", any("covers it" in h for h in covered),
       covered)
+blurred = ensemble.listen(EAR_PLAN, EAR_ROSTER, {
+    "P1": {0: {"abc": "d8 | g8 |"}}, "P2": {0: {"abc": "F8 | d8 |"}},
+    "P3": {0: {"abc": "C,8 | G,,8 |"}}}, [0])
+check("  and two parts outside the chord at the same moment", any("outside C" in h for h in blurred),
+      blurred)
 grid = ensemble.score_grid(EAR_PLAN, EAR_ROSTER, {
     "P1": {0: {"abc": "c8 | d8 |"}}, "P3": {0: {"abc": "C,8 | G,,8 |"}}}, [0])
 check("  the score is shown beat by beat at concert pitch, lowest first",
       grid[0] == "m.1.1 [C] Cello C3, Flute C5" and grid[1] == "m.1.2 [C] Cello C3~, Flute C5~",
       grid[:2])
-check("deep: each part is written against the melody and the parts before it",
-      all("THE MELODY FOR THESE BARS" in p for p in part_prompts)
-      and "PARTS ALREADY COMPOSED" not in first_passage[0]
-      and "[P5] Piano" in first_passage[1].split("PARTS ALREADY COMPOSED")[1])
-check("deep: the lead is handed the melody at its own pitch",
-      "YOU CARRY THE MELODY HERE" in first_passage[1], first_passage[1][-1500:])
-check("deep: an orchestral piano is told to stay soft",
-      "KEYBOARD IS A SOFT COLOUR" in first_passage[0])
-check("deep: every part is the whole piece",
-      all(composer.abc_check.bar_count(p["abc"]) == 40 for p in deep_score["written"]),
-      [composer.abc_check.bar_count(p["abc"]) for p in deep_score["written"]])
-check("deep: the corrected bar is used, so nothing had to be padded",
-      not deep_score["warnings"] and not deep_score["repaired"], deep_score["warnings"])
-check("deep: piano gets its own left hand",
-      next(p for p in deep_score["written"] if p["partId"] == "P5")["abcLower"]
-      .startswith("C,8"))
-check("deep: double bar where each new section starts",
-      deep_score["written"][0]["abc"].count("||") == 2, deep_score["written"][0]["abc"][:200])
-check("deep: score says how it was made", deep_score["mode"] == "deep")
-check("deep: two chords may share a bar",
-      any(h["chord"] == "C F" for h in deep_score["harmony"]), deep_score["harmony"][16:20])
-check("deep: the piece closes V7 - I in the home key",
-      [h["chord"] for h in deep_score["harmony"][-2:]] == ["C G7", "C"]
-      and deep_score["written"][0]["abc"].count("[K:") == 2, deep_score["harmony"][-2:])
-violin = deep_score["written"][0]["abc"]
-check("deep: rit. over the last two bars and a held final chord",
-      '"^rit."' in violin and violin.rstrip().endswith("!fermata!c8 |]"), violin[-80:])
-piano = next(p for p in deep_score["written"] if p["partId"] == "P5")["abc"]
-check("deep: an orchestral piano's dynamics are softened", "!mf!" not in piano and "!p!" in piano,
-      piano[:80])
-check("deep: harmony and sections cover the piece",
-      len(deep_score["harmony"]) == 40 and deep_score["sections"][2]["fromMeasure"] == 37,
-      deep_score["sections"])
-
-# A melody that keeps replaying the same bars goes back to be varied; held
-# notes and rests may recur freely.
-tune = {0: {"abc": "!p! cdef | gfed | c8 |"}, 1: {"abc": "cdef | gfed | e8 |"},
-        2: {"abc": "!f! cdef | gfed | abag | c8 |"}}
-check("deep: bars heard a third time are sent back to be varied",
-      deep._repeats(tune, 2) and not deep._repeats(tune, 1), deep._repeats(tune, 2))
-check("  a fresh section is left alone",
-      not deep._repeats({**tune, 2: {"abc": "efga | bagf | e8 |"}}, 2))
-
-# Key changes are prepared: ii - V7 of the new key, then its tonic.
-deep_chords = [h["chord"] for h in deep_score["harmony"]]
-check("deep: a key change is led into by ii - V7 and lands on the new tonic",
-      deep_chords[19] == "Am7 D7" and deep_chords[20] == "G" and deep_chords[35] == "Dm7 G7",
-      deep_chords[18:22] + deep_chords[34:37])
-
-# The main theme must be recognisable where it returns: its opening intervals,
-# a semitone of give (a return in the minor).
-check("deep: the main theme's motif is found, in the major or the minor",
-      deep._contains_motif([55, 60, 64, 67, 72, 72], [4, 3, 5, 0])
-      and deep._contains_motif([60, 63, 67, 72, 72], [4, 3, 5, 0])
-      and not deep._contains_motif([60, 62, 64, 65, 67], [4, 3, 5, 0]))
-
-# How to play it must be on the page.
-PLAY_PLAN = {"timeSignature": "4/4", "tempoBpm": 120,
-             "_sections": [{"start": 1, "key": "C major"}]}
-OBOE = {"label": "Oboe", "instrument": "Oboe", "pitched": True, "transpose": 0}
-VIOLIN = {"label": "Violin", "instrument": "Violin", "pitched": True, "transpose": 0}
-bare = {"abc": " | ".join(["cdef gfed"] * 2 + ["c8"] * 6) + " |"}
-check("deep: a bare run of fast notes is sent back to be articulated",
-      any("articulation" in p for p in deep._playability(VIOLIN, bare, 0, PLAY_PLAN)),
-      deep._playability(VIOLIN, bare, 0, PLAY_PLAN))
-check("  slurred runs, with breaths, pass",
-      not deep._playability(OBOE, {"abc": "(cdef) .g.f.e.d | c8 | c4 z4 | c8 |"}, 0,
-                            PLAY_PLAN))
-check("  a wind line eight bars without a breath is sent back",
-      any("breath" in p for p in deep._playability(OBOE, bare, 0, PLAY_PLAN))
-      and not any("breath" in p for p in deep._playability(VIOLIN, bare, 0, PLAY_PLAN)))
 
 # Balance: the tune above, the accompaniment a step under it, two under a solo.
 BAL_SECTIONS = [{"start": 1, "end": 2, "bars": 2, "dynamic": "f", "lead": "P1", "texture": "tutti"},
@@ -1003,6 +1146,78 @@ with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "u
                        headers=AUTHED).json
 check("deep estimate is longer than light", heavy["typicalSeconds"] > light["typicalSeconds"],
       (light, heavy))
+
+# --- the optional choices on the compose form ------------------------------
+import choices
+import options as options_module
+import validators
+check("choices: nothing chosen leaves the plan schema alone",
+      choices.constrain(composer.PLAN_SCHEMA, COMPOSE) is composer.PLAN_SCHEMA)
+fixed = choices.constrain(composer.PLAN_SCHEMA, {**COMPOSE, "timeSignature": "3/4",
+                                                 "keyRoot": "Db", "keyMode": "minor"})
+check("  a chosen time signature and key become one-value enums the model must use",
+      fixed["properties"]["timeSignature"]["enum"] == ["3/4"]
+      and fixed["properties"]["concertKey"]["enum"] == ["C# minor"]
+      and "enum" not in composer.PLAN_SCHEMA["properties"]["timeSignature"])
+check("  a mode alone allows every key in that mode",
+      len(choices.constrain(deep.PLAN_SCHEMA, {**COMPOSE, "keyMode": "major"})
+          ["properties"]["concertKey"]["enum"]) == 12)
+check("  and the schema is still valid for strict Structured Outputs", not walk_schema(fixed))
+prompt_with_choices = composer.build_user_prompt(
+    {**COMPOSE, "timeSignature": "6/8", "length": {"unit": "minutes", "value": 3}}, ROSTER)
+check("  the planner is told the choices and a length in minutes",
+      "Time signature: 6/8 throughout" in prompt_with_choices
+      and "about 3 minutes" in prompt_with_choices)
+check("  a length in bars replaces the level's default",
+      "LENGTH: 80 measures" in composer.build_user_prompt(
+          {**COMPOSE, "length": {"unit": "bars", "value": 80}}, ROSTER))
+check("validators: the choices are optional and checked when given",
+      not validators.validate_composition({**COMPOSE, "timeSignature": "", "keyRoot": "",
+                                           "keyMode": "", "length": None})
+      and set(validators.validate_composition({**COMPOSE, "timeSignature": "7/4",
+                                               "keyMode": "dorian",
+                                               "length": {"unit": "bars", "value": 999}}))
+      == {"timeSignature", "keyMode", "length"})
+check("  'Let GPT choose' needs a size instead of instruments",
+      not validators.validate_composition({**COMPOSE, "instruments": [],
+                                           "instrumentMode": "auto", "orchestraScale": "small"})
+      and "orchestraScale" in validators.validate_composition(
+          {**COMPOSE, "instruments": [], "instrumentMode": "auto"}))
+
+AUTO = {**COMPOSE, "instruments": [], "instrumentMode": "auto", "orchestraScale": "chamber"}
+picked = FakeCompletion({"instruments": [{"name": "Violin", "parts": 9},
+                                         {"name": "Cello", "parts": 1},
+                                         {"name": "Kazoo", "parts": 1},
+                                         {"name": "Flute", "parts": 1},
+                                         {"name": "Viola", "parts": 1}],
+                         "why": "Strings and a flute for a light, happy piece."})
+with mock.patch.object(composer, "client") as fake_client:
+    fake_client.return_value.chat.completions.create.return_value = picked
+    roster_chosen, why = choices.choose_instruments(AUTO)
+check("choices: GPT's ensemble is kept to known instruments, part caps and the size",
+      [e["name"] for e in roster_chosen] == ["Violin", "Viola", "Cello", "Flute"]
+      and sum(e["parts"] for e in roster_chosen) <= 7
+      and all(e["parts"] <= options_module.INSTRUMENT_SPECS[e["name"]]["maxParts"]
+              for e in roster_chosen) and why.startswith("Strings"),
+      roster_chosen)
+with mock.patch.object(composer, "client") as fake_client:
+    fake_client.return_value.chat.completions.create.side_effect = composer.OpenAIError("down")
+    fallback, _ = choices.choose_instruments({**AUTO, "orchestraScale": "full"})
+check("  if the call fails, a standard orchestra of that size is used",
+      fallback == choices.preset("full") and 14 <= sum(e["parts"] for e in fallback) <= 22,
+      fallback)
+seen = {}
+def fake_compose(data, report=None):
+    seen.update(data)
+    raise composer.ComposerError("stop here", status=418)
+with mock.patch.object(firebase_auth, "verify_id_token", return_value={"uid": "uid-123"}), \
+     mock.patch.object(choices, "choose_instruments",
+                       return_value=([{"name": "Flute", "parts": 1}], "why")), \
+     mock.patch.object(composer, "compose", side_effect=fake_compose):
+    r = client.post("/api/compose", json={**AUTO, "requestId": "auto-1"}, headers=AUTHED)
+check("POST /api/compose with 'Let GPT choose' writes for the chosen instruments",
+      r.status_code == 418 and seen.get("instruments") == [{"name": "Flute", "parts": 1}],
+      (r.status_code, seen.get("instruments")))
 
 # --- error shapes --------------------------------------------------------
 r = client.get("/api/nope")

@@ -402,7 +402,7 @@ export const OPTIONS = {
     {
       "value": "elementary-school",
       "label": "Elementary school",
-      "guidance": "Very short rehearsal attention span. Unison or two parts at most, constant doubling, nothing faster than eighth notes."
+      "guidance": "Very short rehearsal attention span. Unison or two parts at most, constant doubling, and only the rhythms young players can read: quarters, halves and eighths."
     },
     {
       "value": "middle-school",
@@ -417,7 +417,7 @@ export const OPTIONS = {
     {
       "value": "college",
       "label": "College / University",
-      "guidance": "Music majors. Their juries already demand three-octave scales and arpeggios in every key, double stops in thirds, sixths and octaves, a virtuoso étude and a concerto movement; their pianists audition with Chopin and Liszt études at full tempo. Write at that standard — a piece they could sight-read in one pass is too easy."
+      "guidance": "Music majors. Their juries already demand three-octave scales and arpeggios in every key, double stops in thirds, sixths and octaves, a virtuoso étude and a concerto movement; their pianists audition with Chopin and Liszt études. Write at that standard — a piece they could sight-read in one pass is too easy."
     },
     {
       "value": "community",
@@ -440,25 +440,25 @@ export const OPTIONS = {
       "value": "beginner",
       "label": "Beginner",
       "years": "under 1 year",
-      "guidance": "Keys of C, G, F or D major. Time in 4/4, 3/4 or 2/4 at a steady tempo. Whole, half, quarter and eighth notes, plus the dotted-quarter-eighth figure and simple ties. Stay inside the easy range. Stepwise motion with leaps up to a sixth. Strings stay in first position; winds stay in the first octave they learn. Whole-bar rests so players can find their place. Slurs, staccato and three dynamic levels are all fair — a first-year player can shape a phrase even if they cannot play fast."
+      "guidance": "Keys of C, G, F or D major. Time in 4/4, 3/4 or 2/4. Whole, half, quarter and eighth notes, plus the dotted-quarter-eighth figure and simple ties. Stay inside the easy range. Stepwise motion with leaps up to a sixth. Strings stay in first position; winds stay in the first octave they learn; brass in the middle register. Whole-bar rests so players can find their place. Slurs, staccato and three dynamic levels are all fair — a first-year player can shape a phrase."
     },
     {
       "value": "intermediate",
       "label": "Intermediate",
       "years": "1 – 3 years",
-      "guidance": "Up to four sharps or flats, and accidentals outside the key. Sustained sixteenth-note passages at a moderate tempo, dotted rhythms, triplets, syncopation and ties across barlines. One meter change is fine. Mostly the easy range, reaching into the full range at climaxes. Leaps up to an octave. Strings use third position and simple double stops; winds cross the break freely. Independent lines rather than constant doubling, short exposed entries, and the full articulation vocabulary from pp to ff."
+      "guidance": "Up to four sharps or flats, and accidentals outside the key. Dotted rhythms, triplets, syncopation and ties across barlines; one meter change is fine. Mostly the easy range, reaching into the full range at climaxes. Leaps up to an octave. Strings: up to third position with shifts, simple double stops, spiccato and hooked bowings. Winds cross the break freely; brass use lip slurs within the harmonic series. Independent lines rather than constant doubling, short exposed entries, and the full articulation vocabulary from pp to ff."
     },
     {
       "value": "higher-intermediate",
       "label": "Higher intermediate",
       "years": "4 – 7 years",
-      "guidance": "Conservatory-audition standard — Henle difficulty 5-6, the level of a Brahms violin sonata or a Kreutzer étude. Any key, chromatic harmony and modulation. Fast sixteenth-note passagework that has to be practised, dotted and syncopated rhythm, triplets against duple, hemiola. The full written range including the top of it. Independent lines rather than doubling. Strings: up to seventh position, double stops, spiccato and fast string crossings. Winds and brass: the whole range, fast tonguing, wide slurred intervals. Piano: both hands busy — broken chords and scale runs in sixteenths, octaves. Everything articulated and shaped."
+      "guidance": "Conservatory-audition standard — Henle difficulty 5-6, the level of a Brahms violin sonata or a Kreutzer étude. What makes it harder is technique and range, never speed. Any key, chromatic harmony and modulation. Dotted and syncopated rhythm, triplets against duple, hemiola. The full written range including the top of it, played with control. Strings: up to seventh position with shifts inside the line, double stops in thirds and sixths, spiccato, sautillé, tremolo, sul tasto and sul ponticello. Winds and brass: the whole range, wide slurred intervals, soft sustained notes high in the range, mutes. Piano: independent hands, octaves, wide chords and voicing. Long exposed solos. Everything articulated and shaped."
     },
     {
       "value": "pro",
       "label": "Pro",
       "years": "8+ years",
-      "guidance": "Virtuoso standard — Henle difficulty 7-8: a Paganini caprice, the Beethoven violin concerto, a Chopin or Liszt concert étude. No caution. Chromatic and extended harmony, real modulation, rubato. Rapid sixteenth- and thirty-second-note runs, arpeggios across the whole instrument, wide leaps, the extremes of range and dynamic, cross-rhythm. Strings: high positions, double stops in thirds, sixths and octaves, chords, ricochet and harmonics. Winds: double tonguing, altissimo, rapid chromatic runs. Write as for paid players who will read it once and perform it."
+      "guidance": "Virtuoso standard — Henle difficulty 7-8: a Paganini caprice, the Beethoven violin concerto, a Chopin or Liszt concert étude. What makes it professional is technique and range, never speed: the extremes of every instrument's range used musically; strings in high positions on every string, double stops in thirds, sixths and octaves, three- and four-note chords, natural and artificial harmonics, ricochet, col legno; winds in the altissimo register, double and triple tonguing, flutter-tonguing, wide slurred leaps, pianissimo at the extremes; brass at the top and in the pedal register, stopped horn, mutes, lip trills; four-mallet chords. Chromatic harmony, real modulation, rubato, cross-rhythm, long exposed solos. Write as for paid players who will read it once and perform it."
     }
   ],
   "moods": [

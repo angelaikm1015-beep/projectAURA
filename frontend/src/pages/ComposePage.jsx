@@ -22,7 +22,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { AppHeader, PageIntro } from "../components/app-header";
 import { FormMessage, SubmitButton } from "../components/chrome";
-import { ChoiceCards, SelectField, TextAreaField } from "../components/fields";
+import { ChipGroup, ChoiceCards, Field, SelectField, TextAreaField } from "../components/fields";
 import { GenerationProgress } from "../components/generation-progress";
 import { InstrumentPicker, totalParts } from "../components/instrument-picker";
 import { ScoreView } from "../components/score-view";
@@ -42,7 +42,56 @@ const EMPTY = {
   conductor: "",
   notes: "",
   mode: "light",
+  // Who picks the instruments: the user ticks them, or GPT chooses an ensemble
+  // of the size asked for.
+  instrumentMode: "manual",
+  orchestraScale: "",
+  // Optional musical details. "" means Auto — the mood decides.
+  timeSignature: "",
+  keyMode: "",
+  keyRoot: "",
+  lengthUnit: "",
+  lengthValue: "",
 };
+
+const INSTRUMENT_MODES = [
+  { value: "manual", label: "I'll pick the instruments" },
+  { value: "auto", label: "Let GPT choose" },
+];
+
+// Kept in step with ORCHESTRA_SCALES in backend/choices.py.
+const SCALE_CHOICES = [
+  {
+    value: "chamber",
+    label: "Chamber group",
+    description: "4–7 parts: a string quartet with a wind or two, a wind quintet, a small mixed group.",
+    parts: 6,
+  },
+  {
+    value: "small",
+    label: "Small orchestra",
+    description: "8–13 parts: strings with pairs of winds, horns, perhaps timpani.",
+    parts: 11,
+  },
+  {
+    value: "full",
+    label: "Full orchestra",
+    description: "14–22 parts: full strings, woodwinds, brass, timpani and percussion.",
+    parts: 18,
+  },
+];
+
+const AUTO = { value: "", label: "Auto" };
+const TIME_CHOICES = [AUTO, ...["2/4", "3/4", "4/4", "6/8", "12/8", "5/4"]
+  .map((value) => ({ value, label: value }))];
+const KEY_MODE_CHOICES = [AUTO, { value: "major", label: "Major" }, { value: "minor", label: "Minor" }];
+const KEY_ROOT_CHOICES = [AUTO, ...[
+  ["C", "C"], ["Db", "D♭"], ["D", "D"], ["Eb", "E♭"], ["E", "E"], ["F", "F"],
+  ["F#", "F♯"], ["G", "G"], ["Ab", "A♭"], ["A", "A"], ["Bb", "B♭"], ["B", "B"],
+].map(([value, label]) => ({ value, label }))];
+const LENGTH_UNITS = [AUTO, { value: "minutes", label: "Minutes" }, { value: "bars", label: "Bars" }];
+// Kept in step with LENGTH_LIMITS in backend/choices.py.
+const LENGTH_LIMITS = { minutes: [1, 10], bars: [16, 200] };
 
 const CONDUCTOR_CHOICES = [
   {
@@ -76,9 +125,9 @@ const MODE_CHOICES = [
     value: "deep",
     label: "Deep composing",
     description:
-      "GPT composes the melody of the whole piece first, then writes every part one " +
-      "by one against it, and checks and corrects each. Much richer, but it takes a " +
-      "long time — often 30–90 minutes for a full ensemble.",
+      "GPT plans the piece, then writes the full score — every instrument together, " +
+      "passage by passage — so the parts are composed against each other. Richer, " +
+      "and it takes longer: usually 5–15 minutes.",
   },
 ];
 
@@ -170,8 +219,11 @@ export default function ComposePage() {
     return () => { stopped = true; clearInterval(timer); };
   }, [pending, pendingMode]);
 
-  // What to promise before the button is pressed, keyed to the actual roster.
-  const plannedParts = totalParts(values.instruments);
+  // What to promise before the button is pressed, keyed to the actual roster —
+  // or, when GPT is choosing, to the middle of the size asked for.
+  const plannedParts = values.instrumentMode === "auto"
+    ? SCALE_CHOICES.find((scale) => scale.value === values.orchestraScale)?.parts || 0
+    : totalParts(values.instruments);
   useEffect(() => {
     if (!plannedParts) { setEstimate(null); return undefined; }
     let cancelled = false;
@@ -187,6 +239,11 @@ export default function ComposePage() {
     setErrors((prev) => ({ ...prev, [field]: null }));
   };
 
+  const choose = (field) => (value) => {
+    setValues((prev) => ({ ...prev, [field]: value }));
+    setErrors((prev) => ({ ...prev, [field]: null }));
+  };
+
   const setInstruments = (instruments) => {
     setValues((prev) => ({ ...prev, instruments }));
     setErrors((prev) => ({ ...prev, instruments: null }));
@@ -196,8 +253,15 @@ export default function ComposePage() {
   const groupHint = options.ensembleGroups?.find((g) => g.value === values.ensembleGroup)?.guidance;
 
   function validate() {
+    const auto = values.instrumentMode === "auto";
+    const [low, high] = LENGTH_LIMITS[values.lengthUnit] || [];
+    const length = Number(values.lengthValue);
     return {
-      instruments: values.instruments.length ? null : "Pick at least one instrument.",
+      instruments: auto || values.instruments.length ? null : "Pick at least one instrument.",
+      orchestraScale: !auto || values.orchestraScale ? null : "Choose how big the orchestra should be.",
+      length: !values.lengthUnit || (Number.isInteger(length) && length >= low && length <= high)
+        ? null
+        : `Choose between ${low} and ${high} ${values.lengthUnit}.`,
       ensembleGroup: values.ensembleGroup ? null : "Select who is playing.",
       level: values.level ? null : "Select a playing level.",
       mood: values.mood ? null : "Select a mood.",
@@ -210,13 +274,21 @@ export default function ComposePage() {
      to the same brief as the first. */
   function payload() {
     return {
-      instruments: values.instruments,
+      instruments: values.instrumentMode === "auto" ? [] : values.instruments,
       ensembleGroup: values.ensembleGroup,
       level: values.level,
       mood: values.mood,
       conductor: values.conductor === "yes",
       notes: values.notes.trim(),
       mode: values.mode,
+      instrumentMode: values.instrumentMode,
+      orchestraScale: values.instrumentMode === "auto" ? values.orchestraScale : "",
+      timeSignature: values.timeSignature,
+      keyMode: values.keyMode,
+      keyRoot: values.keyRoot,
+      length: values.lengthUnit
+        ? { unit: values.lengthUnit, value: Number(values.lengthValue) }
+        : null,
     };
   }
 
@@ -232,7 +304,9 @@ export default function ComposePage() {
         result = await waitForComposition(result.requestId, setProgress);
       }
       setScore(result.score);
-      setBrief(describeBrief(options, sent));
+      // The server's copy of the brief, when it sends one, also says which
+      // instruments GPT chose and why.
+      setBrief(describeBrief(options, result.request ? { ...sent, ...result.request } : sent));
       // The API saves every piece as it makes it. Without an id the score is
       // still on screen and still downloadable, it just can't be shared.
       setSaved(result.scoreId
@@ -336,6 +410,7 @@ export default function ComposePage() {
     return (
       <ScoreView
         score={score}
+        scoreId={saved?.id}
         brief={brief}
         pending={pending}
         pendingLabel={progress?.label || WAIT_STEPS[step]}
@@ -369,14 +444,39 @@ export default function ComposePage() {
 
         <p className="section-title">Who's playing</p>
 
-        <InstrumentPicker
+        <ChipGroup
           label="Instruments"
-          groups={options.scoreInstruments}
-          info={options.instrumentInfo}
-          value={values.instruments}
-          error={errors.instruments}
-          onChange={setInstruments}
+          size="large"
+          options={INSTRUMENT_MODES}
+          value={values.instrumentMode}
+          onChange={choose("instrumentMode")}
         />
+
+        {values.instrumentMode === "auto" ? (
+          <>
+            <ChoiceCards
+              label="How big is the orchestra?"
+              name="orchestraScale"
+              options={SCALE_CHOICES}
+              value={values.orchestraScale}
+              error={errors.orchestraScale}
+              onChange={set("orchestraScale")}
+            />
+            <p className="hint hint-standalone">
+              GPT picks the instruments that suit the mood and your players, and the score
+              shows which it chose.
+            </p>
+          </>
+        ) : (
+          <InstrumentPicker
+            label="Which instruments?"
+            groups={options.scoreInstruments}
+            info={options.instrumentInfo}
+            value={values.instruments}
+            error={errors.instruments}
+            onChange={setInstruments}
+          />
+        )}
 
         <SelectField
           label="What kind of group is this?"
@@ -418,6 +518,63 @@ export default function ComposePage() {
           <p className="hint hint-standalone">
             The mood is the theme of the piece — it decides the key, tempo and character.
           </p>
+        )}
+
+        <p className="section-title">Musical details <span className="section-title__note">(optional)</span></p>
+        <p className="hint hint-standalone">
+          Leave any of these on Auto and the mood decides.
+        </p>
+
+        <ChipGroup
+          label="Time signature"
+          options={TIME_CHOICES}
+          value={values.timeSignature}
+          error={errors.timeSignature}
+          onChange={choose("timeSignature")}
+        />
+
+        <ChipGroup
+          label="Major or minor"
+          options={KEY_MODE_CHOICES}
+          value={values.keyMode}
+          error={errors.keyMode}
+          onChange={choose("keyMode")}
+        />
+
+        <ChipGroup
+          label="Key"
+          options={KEY_ROOT_CHOICES}
+          value={values.keyRoot}
+          error={errors.keyRoot}
+          onChange={choose("keyRoot")}
+        />
+
+        <ChipGroup
+          label="Length"
+          options={LENGTH_UNITS}
+          value={values.lengthUnit}
+          error={values.lengthUnit ? null : errors.length}
+          onChange={(unit) => {
+            setValues((prev) => ({
+              ...prev,
+              lengthUnit: unit,
+              lengthValue: unit === "minutes" ? "3" : unit === "bars" ? "64" : "",
+            }));
+            setErrors((prev) => ({ ...prev, length: null }));
+          }}
+        />
+        {values.lengthUnit && (
+          <Field
+            label={values.lengthUnit === "minutes" ? "How many minutes?" : "How many bars?"}
+            type="number"
+            inputMode="numeric"
+            min={LENGTH_LIMITS[values.lengthUnit][0]}
+            max={LENGTH_LIMITS[values.lengthUnit][1]}
+            value={values.lengthValue}
+            error={errors.length}
+            hint={`${LENGTH_LIMITS[values.lengthUnit][0]}–${LENGTH_LIMITS[values.lengthUnit][1]} ${values.lengthUnit}.`}
+            onChange={set("lengthValue")}
+          />
         )}
 
         <ChoiceCards
@@ -469,9 +626,9 @@ export default function ComposePage() {
             <strong>{Math.max(1, Math.round(estimate.lowSeconds / 60))}–
             {Math.round(estimate.highSeconds / 60)} minutes</strong>
             {values.mode === "deep"
-              ? " — GPT composes the melody first, then each part one by one against " +
-                "it, checking and correcting as it goes. It's saved to your library when " +
-                "it's done, even if you close this page."
+              ? " — GPT writes the full score, every instrument together, passage by " +
+                "passage. It's saved to your library when it's done, even if you close " +
+                "this page."
               : " — every bar of every part is written, then checked and corrected " +
                 "before you see it."}
           </p>

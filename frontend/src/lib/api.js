@@ -131,6 +131,29 @@ export async function waitForComposition(requestId, onProgress) {
 export const fetchMyScores = () => request("/api/scores", { authenticated: true });
 
 /**
+ * A deep-composed piece as a MusicXML file, built by the server from the
+ * compact score it is stored as. Resolves to the file's text.
+ */
+export async function fetchMusicXml(id) {
+  const user = auth.currentUser;
+  if (!user) throw new ApiError("You need to be logged in.", 401);
+  let response;
+  try {
+    response = await fetch(`/api/scores/${id}/musicxml`, {
+      headers: { Authorization: `Bearer ${await user.getIdToken()}` },
+    });
+  } catch {
+    throw new ApiError("Can't reach the server. Is the Flask backend running?", 0);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new ApiError(payload.message || `Request failed (${response.status}).`,
+                       response.status);
+  }
+  return response.text();
+}
+
+/**
  * The community feed, optionally narrowed. Comes back as
  * `{ scores, facets, total }` — the facets are how many shared pieces sit
  * behind each filter choice, so the UI can show counts.

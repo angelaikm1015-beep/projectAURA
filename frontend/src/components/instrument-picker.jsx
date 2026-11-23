@@ -6,9 +6,10 @@
  * whether you want one violin line or three — Violin I, II and III are three
  * separate parts with different music, and the generator has to be told which.
  *
- * So the dropdown adds an instrument, and each chosen instrument then carries a
- * stepper for its number of parts. The caps come from the server (a section can
- * divide, a drum set can't) so the form can't ask for something the API rejects.
+ * So every instrument is a checkbox, grouped by family the way a score is laid
+ * out, and each one that is ticked then carries a stepper for its number of
+ * parts. The caps come from the server (a section can divide, a drum set can't)
+ * so the form can't ask for something the API rejects.
  */
 
 import { useId, useState } from "react";
@@ -30,7 +31,6 @@ export function totalParts(chosen) {
 
 export function InstrumentPicker({ label, groups = [], info = {}, value = [], error, onChange }) {
   const generatedId = useId();
-  const selectId = `${generatedId}-add`;
   const errorId = `${generatedId}-error`;
   const [browsing, setBrowsing] = useState(false);
   const [playing, setPlaying] = useState(null);
@@ -54,20 +54,17 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
   const chosenNames = new Set(value.map((entry) => entry.name));
   const used = totalParts(value);
 
-  // Anything already chosen drops out of the dropdown — it's re-added by
-  // raising its part count, not by picking it twice.
-  const available = groups
-    .map((group) => ({
-      ...group,
-      options: group.options.filter((name) => !chosenNames.has(name)),
-    }))
-    .filter((group) => group.options.length);
-
-  const add = (event) => {
-    const name = event.target.value;
-    if (!name) return;
-    onChange([...value, { name, parts: 1 }]);
-    event.target.value = "";
+  // Ticking adds the instrument with one part; unticking removes it whatever
+  // its part count. Order follows the score, not the order of the clicks.
+  const order = groups.flatMap((group) => group.options);
+  const toggle = (name) => {
+    if (chosenNames.has(name)) {
+      onChange(value.filter((entry) => entry.name !== name));
+      return;
+    }
+    const next = [...value, { name, parts: 1 }];
+    next.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+    onChange(next);
   };
 
   const setParts = (name, parts) =>
@@ -79,30 +76,34 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
     <div className="field">
       <span className="field-label" id={`${generatedId}-label`}>{label}</span>
 
-      <div className="picker-row">
-        <select
-          id={selectId}
-          aria-label="Add an instrument"
-          defaultValue=""
-          onChange={add}
-          disabled={!available.length}
-          aria-invalid={error ? "true" : undefined}
-          aria-describedby={error ? errorId : undefined}
-        >
-          <option value="" disabled>
-            {available.length ? "Add an instrument…" : "Every instrument is already on the list"}
-          </option>
-          {available.map((group) => (
-            <optgroup key={group.group} label={group.group}>
-              {group.options.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+      <div
+        className="checks"
+        aria-labelledby={`${generatedId}-label`}
+        aria-invalid={error ? "true" : undefined}
+        aria-describedby={error ? errorId : undefined}
+      >
+        {groups.map((group) => (
+          <fieldset className="checks__group" key={group.group}>
+            <legend className="checks__legend">{group.group}</legend>
+            <div className="checks__grid">
+              {group.options.map((name) => {
+                const checked = chosenNames.has(name);
+                return (
+                  <label key={name} className={`check${checked ? " is-checked" : ""}`}>
+                    <input type="checkbox" checked={checked} onChange={() => toggle(name)} />
+                    <span className="check__box" aria-hidden="true" />
+                    <span className="check__name">{name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
+        ))}
+      </div>
 
+      <div className="picker-row">
         <button type="button" className="btn btn-ghost btn-small" onClick={() => setBrowsing(true)}>
-          {canListen ? "Browse & listen" : "Browse all"}
+          {canListen ? "Browse & listen to each instrument" : "Browse all instruments"}
         </button>
       </div>
 
@@ -171,7 +172,7 @@ export function InstrumentPicker({ label, groups = [], info = {}, value = [], er
 
       <p className="hint">
         {value.length === 0
-          ? "Pick every instrument that will be playing — “Browse & listen” lets you hear each one first. Add the same instrument once, then set how many parts it splits into."
+          ? "Tick every instrument that will be playing — “Browse & listen” lets you hear each one first. Then set how many parts each splits into."
           : `${used} part${used === 1 ? "" : "s"}. Each part gets its own printed sheet.`}
       </p>
       {error && <p className="error" id={errorId}>{error}</p>}

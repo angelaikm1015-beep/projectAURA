@@ -16,16 +16,18 @@ import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 from firebase_admin import auth as firebase_auth
 from firebase_admin import firestore
 from google.api_core import exceptions as google_exceptions
 from werkzeug.exceptions import HTTPException
 
+import choices
 import composer
 import deep
 import library
+import musicxml
 import progress
 import options
 import validators
@@ -176,9 +178,21 @@ def register_routes(app: Flask) -> None:
         # The client makes up an id and polls /api/compose/progress/<id> while it
         # waits, so a six-minute request can say what it is doing.
         request_id = str(data.get("requestId") or "")
+        # "Let GPT choose": the ensemble is picked first, and from then on the
+        # piece is written exactly as if the user had ticked those instruments.
+        chosen_why = ""
+        if choices.auto_instruments(data):
+            data["instruments"], chosen_why = choices.choose_instruments(data)
         roster_size = sum(int(e.get("parts", 1)) for e in data["instruments"])
         brief = {
             "instruments": data["instruments"],
+            "instrumentMode": data.get("instrumentMode") or "manual",
+            "orchestraScale": data.get("orchestraScale") or "",
+            "ensembleWhy": chosen_why,
+            "timeSignature": data.get("timeSignature") or "",
+            "keyRoot": data.get("keyRoot") or "",
+            "keyMode": data.get("keyMode") or "",
+            "length": data.get("length") or None,
             "ensembleGroup": data["ensembleGroup"],
             "level": data["level"],
             "mood": data["mood"],
@@ -340,6 +354,28 @@ def register_routes(app: Flask) -> None:
     def get_score(score_id):
         """One saved score in full — the owner's, or anyone's shared piece."""
         return jsonify(library.get(score_id, g.uid))
+
+    @app.get("/api/scores/<score_id>/musicxml")
+    @require_auth
+    def score_musicxml(score_id):
+        """The piece as a MusicXML file, built from the compact score it is stored as.
+
+        Only deep-composed pieces carry one (see deep.compose); a piece edited
+        since loses it, because the edit rewrites the notation directly.
+        """
+        saved = library.get(score_id, g.uid)
+        stored = (saved.get("score") or {}).get("compact")
+        if not stored:
+            return jsonify({"message": "MusicXML is available for deep-composed pieces "
+                                       "that haven't been edited since. Download MIDI or "
+                                       ".abc instead."}), 404
+        roster = composer.build_roster((saved.get("brief") or {}).get("instruments") or [])
+        name = "".join(ch for ch in (stored.get("title") or "score")
+                       if ch.isalnum() or ch in " -_").strip() or "score"
+        return Response(musicxml.build(stored, roster),
+                        mimetype="application/vnd.recordare.musicxml+xml",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{name}.musicxml"'})
 
     @app.patch("/api/scores/<score_id>")
     @require_auth

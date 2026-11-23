@@ -188,3 +188,39 @@ export function ChoiceCards({ label, name, options = [], value, error, onChange,
     </div>
   );
 }
+
+/**
+ * A row of buttons, one of which is chosen — for short choices where a card
+ * would be too much: a time signature, a key, major or minor. Each option is
+ * { value, label }; "" is a legitimate value ("Auto").
+ */
+export function ChipGroup({ label, hint, options = [], value, error, onChange, size }) {
+  const groupId = useId();
+  const errorId = `${groupId}-error`;
+  return (
+    <div className="field">
+      <span className="field-label" id={`${groupId}-label`}>{label}</span>
+      <div
+        className={`chips${size === "large" ? " chips--large" : ""}`}
+        role="radiogroup"
+        aria-labelledby={`${groupId}-label`}
+        aria-describedby={error ? errorId : undefined}
+      >
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={value === option.value}
+            className={`chip${value === option.value ? " is-selected" : ""}`}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {hint && <p className="hint">{hint}</p>}
+      {error && <p className="error" id={errorId}>{error}</p>}
+    </div>
+  );
+}

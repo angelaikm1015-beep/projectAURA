@@ -54,10 +54,10 @@ export function GenerationProgress({ progress, elapsed, fallbackLabel, mode = "l
 
       {mode === "deep" ? (
         <p className="genprog__note">
-          Deep composing: GPT is composing the melody of the whole piece, then every
-          part one by one against it, and correcting what doesn't fit. This takes a
-          long time — often 30–90 minutes. You can close this tab; the finished
-          piece is saved to your library either way.
+          Deep composing: GPT is writing the full score — every instrument together,
+          passage by passage — and the parts are then engraved and checked. This
+          usually takes 5–15 minutes. You can close this tab; the finished piece is
+          saved to your library either way.
         </p>
       ) : (
         <p className="genprog__note">

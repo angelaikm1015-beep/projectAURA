@@ -185,6 +185,27 @@ python backend/generate_options.py
 
 `smoke_test.py` fails if you forget, so the two can't silently drift.
 
+## The compose form
+
+- **Instruments.** A toggle chooses how. **I'll pick the instruments** shows
+  every instrument as a checkbox, grouped by family, and each ticked one gets a
+  stepper for its number of parts (Violin ×2 is Violin I and II). **Let GPT
+  choose** asks only for the size: a chamber group (4–7 parts), a small
+  orchestra (8–13) or a full orchestra (14–22).
+  [choices.py](backend/choices.py) makes a short, low-effort call that picks an
+  ensemble suiting the mood and players. It keeps the result to known
+  instruments, their part caps and the size. If the call fails, a standard
+  orchestra of that size is used. From then on the piece is written as if the
+  user had ticked those instruments, and the score shows which GPT chose and
+  why.
+- **Musical details, all optional (Auto lets the mood decide):** time
+  signature (2/4, 3/4, 4/4, 6/8, 12/8, 5/4), major or minor, key, and length in
+  minutes (1–10) or bars (16–200). A chosen time signature or key becomes a
+  one-value enum in the plan's JSON schema (`choices.constrain`), so the model
+  can't answer with anything else. A mode alone allows any key in that mode. A
+  length replaces the level's default in the brief; in minutes, the plan works
+  the measure count out from its tempo.
+
 ## How the sheet music gets made
 
 There is no OpenAI endpoint that returns sheet music, so
@@ -237,67 +258,129 @@ The compose page offers two modes.
   model writes a chord grid and a few short four-voice phrases, and
   [form.py](backend/form.py) expands them across the ensemble and the form. It
   finishes in a few minutes, but most of each part is arranged by rule.
-* **Deep** ([backend/deep.py](backend/deep.py)) has the model compose every note,
-  in the order a composer works:
-  1. **Architecture.** One call with high reasoning effort sets out the themes,
-     the form, the harmony of every bar, and each section's key, material and
-     texture. It also writes a one-sentence brief for every player in every
-     section, so the parts are planned as a few layers that fit together.
-  2. **Melody and bass.** The model sketches the outer voices together: the
-     melody and its bass line on two staves, in chunks of up to 64 bars, each
-     continuing from what's already written. The bass is checked to name each
-     chord's bass note (`_bass_problems`).
-  3. **Parts, in two waves per passage.** First the frame, together: the bass
-     player, handed the sketch's bass line, and whoever carries the tune, handed
-     the melody. Then everyone else, together. Each of them hears the frame, as
-     ABC and beat by beat at concert pitch (`ensemble.score_grid`), and is given
-     the chord tones that are its own (`inner_voices` / `_harmony_notes`, from
-     `form.voice_chords`), so between them every chord is complete. Each prompt
-     opens with the player's brief, then the music it fits, then orientation,
-     the instrument, and the format rules last. Things Python enforces anyway
-     aren't repeated: balance, the ending, cadences and key-change chords.
-     Passages of up to 32 bars run side by side.
-  4. **The passage review.** With every part in, one call reads the whole
-     passage as a full score, beat by beat. It also gets the problems
-     [ensemble.py](backend/ensemble.py) finds between parts: held semitone
-     clashes, chords nobody gives the third to, parallel fifths and octaves,
-     close intervals below E3, and an accompanist sitting on top of the tune or
-     doubling a soloist. It also gets the playability problems: bare fast runs,
-     and wind lines with no breath. It rewrites the part-sections that need it.
-     A revision is kept only if it adds no errors to its own line and the
-     passage comes out with no more problems than before.
+* **Deep** ([backend/deep.py](backend/deep.py)) has the model write the whole
+  score, with every instrument written together so the parts are composed
+  against each other:
+  1. **Architecture.** One call with high reasoning effort sets out the themes
+     (written in the compact notation), the form, the harmony of every bar,
+     and each section's key, lead, texture, accompaniment type (`sustained`,
+     `arpeggio`, `repeated`, `offbeat`, `pedal`, `countermelody`, `none`) and
+     material. Python prepares every key change (ii – V7 of the new key, then
+     its tonic) and closes the piece V7 – I.
+  2. **The score, a passage at a time.** Passages of up to 32 bars are written
+     side by side. Each passage is one call that writes every instrument at
+     once, section by section, voicing one shared harmony across the parts. The
+     prompt asks for an orchestra of a few layers (tune, bass, harmony, at most
+     one countermelody), each played together by several players.
+  3. **Engraving in Python.** The model never writes ABC or MusicXML. It writes
+     the compact notation described below, and
+     [compact.py](backend/compact.py) does the rest. It parses the notation
+     and silently repairs mechanical slips (bars that don't add up, notes out
+     of range, chords too big for the instrument, broken ties and slurs). It
+     moves notes held two beats or more off the chord onto it, balances the
+     tune over the accompaniment, and ends every staff with *rit.* and a held
+     final chord. Then it writes the ABC the site displays and plays,
+     transposed into each player's key with key signatures and accidentals
+     worked out. The final notes are stored in the compact form, and
+     [musicxml.py](backend/musicxml.py) builds a real MusicXML file from them
+     on demand (`GET /api/scores/<id>/musicxml`, the **Download MusicXML**
+     button).
 
-  Python counts every bar and checks range, held notes against the chords and
-  the closing bar. It sends defects back once for a part (twice for the
-  melody) before trimming or padding a bar so the staves line up.
+  The compact notation is one string per measure, every note at sounding
+  pitch:
 
-  A passage costs three calls in a row (frame, the rest, the review), however
-  many players there are. All calls share `DEEP_CONCURRENCY` slots.
+  ```
+  "@p C4:4( D4:8 E4:8 F4:4 G4:4)"   dynamic p, a slur, quarters and eighths
+  "G4+B4:2. r:4"                    a chord (dotted half) and a quarter rest
+  "E5:2~ E5:8 D5:8 C5:4"            a tie
+  "R"                               a whole-measure rest
+  ```
 
-  After the review, a note held two beats or more that is still off the chord
-  is moved to the nearest chord tone (`_land_on_chords`, via `form.snap_held`).
-  Shorter dissonances, such as passing notes and one-beat suspensions, stay.
-  The listener also flags beats where several parts are outside the chord at
-  once. Each mood has its own melodic gestures (`composer.MOOD_GESTURES`), and
-  chromatic runs, which had become the reflex gesture in every mood, are found
-  (`chromatic_runs`) and sent back.
+  Editing a piece with "ask for a change" rewrites its ABC directly, so an
+  edited piece no longer offers MusicXML.
 
-  The level's difficulty applies where a part is featured (its tune, a solo).
-  Accompaniment stays clear at any level, because a quota of showy passagework
-  in every part made the texture cluttered.
-
-Deep mode takes roughly 20–110 minutes depending on ensemble size and level.
-That is longer than a proxy or browser will hold a request open, so `POST
+Deep mode takes about 5–15 minutes, depending on ensemble size and level. That
+is longer than a proxy or browser will hold a request open, so `POST
 /api/compose` with `"mode": "deep"` answers `202` immediately and runs the piece
 in a background thread. The page polls `/api/compose/progress/<id>` and collects
 the piece from `/api/compose/result/<id>`. It is saved to the library either
-way, so closing the tab loses nothing. Tune it with `DEEP_PLAN_EFFORT` (default
-`high`), `DEEP_WRITE_EFFORT` (`medium`), `DEEP_REPAIR_EFFORT` (`medium`),
-`DEEP_REVIEW_EFFORT` (`high`), `DEEP_ENSEMBLE_ROUNDS` (`1`), `DEEP_CONCURRENCY`
-(`8` calls at once) and `DEEP_CALL_TIMEOUT` (`900`
-seconds).
+way. Tune it with `DEEP_PLAN_EFFORT` (default `high`), `DEEP_WRITE_EFFORT`
+(`medium`), `DEEP_CONCURRENCY` (`8` calls at once) and `DEEP_CALL_TIMEOUT`
+(`900` seconds).
+
+### The main melody and the solos (deep mode)
+
+[backend/features.py](backend/features.py) makes both certain rather than
+hoped for:
+
+- **The main theme.** The plan writes theme A, the main melody, with its own
+  chords. It is stated at the start, at the climax (about two-thirds of the way
+  through) and near the end, in sections long enough for it and in the home
+  key's mode. In each, Python writes the theme into the lead's part, moved into
+  the section's key and by whole octaves into the instrument's singing
+  register (`compact.SINGING`, `compact.fit_register`). The section's first bars
+  take the theme's chords, so tune and harmony agree. The passage writer is
+  shown it as already written and composes around it.
+- **Solos.** Each piece gets one solo, or two at higher-intermediate and pro
+  for pieces of 64 bars or more. They go in middle sections of 4–12 bars, for
+  an instrument with a singing voice other than the one that carries the main
+  tune. Each solo is composed by a call of its own, with melodic rules, the
+  soloist's singing register, and Berlioz and Rimsky-Korsakov on solo writing.
+  [backend/melody.py](backend/melody.py) checks the line for awkward leaps
+  (tritones, sevenths, beyond an octave), unrecovered leaps, too few steps,
+  rests breaking up the phrases, no breath for a wind player, a high note hit
+  again and again, equal note values, notes outside the singing register, and
+  an ending that stops rather than lands. If it finds faults they go back
+  once, and the version with fewer is kept. The passage writers see the solo,
+  write rests there and lead into and out of it. Balance puts the others two
+  dynamic steps under it and marks it *solo*.
+
+### The orchestration textbooks (RAG)
+
+`rag/processed/all_chunks.jsonl` holds Rimsky-Korsakov's *Principles of
+Orchestration* and Berlioz's *Treatise on Instrumentation*, cut into
+~500-token passages with their heading path, instruments and topics (see
+[rag/processed/README.md](rag/processed/README.md)).
+[backend/rag.py](backend/rag.py) retrieves from it with BM25 over the passage
+text, boosted by the topics a call needs and the instruments actually in the
+ensemble. It needs no embedding service and builds no index: the corpus is
+scored in memory in a few milliseconds, and the same request always gets the
+same passages.
+
+- **Deep plan:** three passages on composing for the orchestra: tutti,
+  balance, doubling, combined groups.
+- **Each deep passage call:** three Rimsky-Korsakov passages chosen by that
+  passage's accompaniment type and texture. Berlioz's passage on how the
+  instrument carrying the tune sings is added for each lead, hand-picked per
+  instrument (`BERLIOZ_VOICE`), because his character writing is mixed in with
+  key tables and OCR noise.
+- **Light plan:** two passages on harmony and doubling.
+
+The chapters on voices are left out unless the ensemble has singers. Notation
+examples, which the corpus can't carry, are dropped from the text. Set
+`RAG_CORPUS` to use a corpus elsewhere; without one, prompts go without.
 
 ### Harmony, endings and balance (both modes)
+
+* **Fast notes.** An accompaniment of sixteenths isn't orchestral writing; it's
+  noise under the tune. The prompts ask for mostly quarters and eighths, and the
+  pro-level brief no longer demands fast passagework. In deep mode
+  `compact.thin` merges any run faster than eighths in the accompaniment, and
+  any faster than sixteenths in the tune, into one note per step. Dotted
+  figures are left alone. In playback, the overlap between joined notes and the
+  ring after a note ends are both capped by the note's own length, so fast runs
+  don't smear.
+
+* **The orchestra's harmonic language.** Left to itself the model wrote jazz
+  harmony: in three recent pieces, 68–81% of chords were 9ths, 11ths, 13ths or
+  6/9s. With every player taking a different tone of a five-note chord, the
+  orchestra sounded like a cluster. Every planned chord is now reduced to the
+  triad or seventh chord it stands on (`form.orchestral_chord`: Gmaj9 → Gmaj7,
+  Am11 → Am7, D13 → D7, C6/9 → C). Diminished, half-diminished, augmented and
+  sus4 chords and slash basses are kept. The prompts ask for triads and
+  sevenths, mostly plain triads. In deep mode, every accompanying note on a
+  beat is moved onto the chord, however short. The tune may still lean on an
+  appoggiatura for up to two beats.
 
 * **Harmonic rhythm.** A bar of the chord grid holds one chord, or two separated
   by a space (`"Dm7 G7"`), split on the beat. The prompts ask for chords held
@@ -313,8 +396,8 @@ seconds).
   dynamics print two steps below the ensemble's, light mode voices them as if
   the section were quieter, deep mode tells the model so, and playback mixes
   them lower.
-* **The tune over the accompaniment.** `balance_parts` runs on every finished
-  score. Where a section has a lead, every other player is capped a step below
+* **The tune over the accompaniment.** `balance_parts` (light mode) and
+  `compact.balance` (deep mode) run on every finished score. Where a section has a lead, every other player is capped a step below
   the section's dynamic, or two steps under a `solo`. The soloist's first note
   is marked *solo*. A tutti with no lead plays together at the section's level.
   Every player's entry in a section carries a dynamic.
@@ -323,24 +406,21 @@ seconds).
   accompanying very lightly.
 * **The main melody.** Theme A (phrase A in light mode) is asked to be a tune
   you could sing back, stated near the start and returning at the climax and
-  near the end, with other music between. Deep-mode sections flagged
-  `mainTheme` must open with theme A's motif (`_theme_missing`, a semitone of
-  give for minor-key returns). Those two bars don't count as repetition.
+  near the end, with other music between. In deep mode, the sections flagged
+  `mainTheme` are told to open with theme A exactly.
 * **Key changes.** Each one is prepared. The last bar before a new key is that
   key's ii – V7 (`lead_into`), and deep mode starts the new section on its
   tonic (`arrive_in`). Light mode gives the section before a modulation its own
   copy of its phrase so its chorale is composed toward the new key. The prompts
   tell each line to move into it by step.
-* **Playable parts.** Strings, winds, brass and voices are told how to mark
-  what a player needs: bowings and slur groups, tonguing, breaths and readable
-  rhythms. Deep mode's review (`_playability`) sends back bars of fast notes
-  with no articulation, and wind, brass or voice lines that go more than six
-  bars without a rest or breath.
+* **Playable parts.** In light mode, strings, winds, brass and voices are told
+  how to mark what a player needs: bowings and slur groups, tonguing, breaths
+  and readable rhythms. In deep mode, the compact notation carries slurs,
+  staccato, accents and ties, and the engraver keeps every chord within what
+  the instrument can play.
 * **Repetition.** Light mode writes three to five phrases, roughly 40% of the
-  piece's bars, so each is heard fewer times. Deep mode shows the model the
-  whole melody so far. Its review sends back any melody section whose bars are
-  heard a third time note for note (`_repeats`), and keeps the text if the model
-  can't vary it without breaking something else.
+  piece's bars, so each is heard fewer times. In deep mode, no part may repeat
+  a measure more than twice running, and a returning theme must be transformed.
 
 ### Playback
 
@@ -450,7 +530,8 @@ generation.
 
 ### Getting the music out
 
-Each tab downloads as `.abc` (opens in MuseScore) or MIDI (imports anywhere), and
+Each tab downloads as `.abc` (opens in MuseScore) or MIDI (imports anywhere).
+A deep-composed piece also downloads as MusicXML (the full score). Each tab
 prints on its own — the print stylesheet drops the app chrome so the sheet comes
 out on white paper.
 

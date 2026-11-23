@@ -34,9 +34,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import APIConnectionError, APITimeoutError, OpenAI, OpenAIError
 
 import abc_check
+import choices
 import form
 import options
 import orchestrate
+import rag
 
 # Chosen by measurement rather than by version number. On one 15-part brief,
 # mean distinct pitches per part: gpt-6.1-sol 65.6, gpt-6-astra 55.5,
@@ -286,7 +288,7 @@ LEVEL_DEMANDS = {
     ],
     "intermediate": [
         "This group has played for up to three years and is bored by whole",
-        "notes. It MUST contain: sustained sixteenth-note movement somewhere,",
+        "notes. It MUST contain: some flowing eighth-note movement,",
         "dotted rhythms and syncopation, at least one accidental outside the",
         "key, at least two sections with genuinely different material rather",
         "than the same line doubled, a short exposed entry for at least two",
@@ -298,12 +300,10 @@ LEVEL_DEMANDS = {
         "repertoire and will be insulted by a simple piece. It MUST contain:",
         "  - chromatic harmony and a modulation to a genuinely different key,",
         "    not a piece that sits in one diatonic key throughout;",
-        "  - fast sixteenth-note passagework that has to be practised, built",
-        "    from chord tones and stepwise passing notes;",
+        "  - lines that sing over long phrases, with real shape and breath;",
         "  - sustained cross-rhythm, hemiola and syncopation that does not",
         "    simply fall on the offbeat (the meter itself stays fixed);",
-        "  - four genuinely independent lines inside the chorale — each voice",
-        "    with its own rhythm and contour, every vertical still a real chord;",
+        "  - inner parts that move with purpose, every vertical a real chord;",
         "  - an extended exposed solo line for at least one part;",
         "  - the full written range, including the top of it;",
         "  - dynamics from pp to ff with hairpins, accents and articulation",
@@ -311,22 +311,20 @@ LEVEL_DEMANDS = {
         "A clean, safe, four-square diatonic piece is a FAILED response here.",
     ],
     "pro": [
-        "These are players who do this for a living, and this piece has to be",
-        "worth their rehearsal time. It MUST contain, at minimum:",
-        "  - harmony beyond plain diatonic triads: secondary dominants,",
-        "    borrowed chords, extended sonorities, and real modulations — every",
-        "    one of them named in the chord grid, so the whole ensemble plays it;",
-        "  - rhythm beyond straight quarters and eighths: syncopation,",
-        "    cross-rhythm and hemiola (the meter itself stays fixed, so a large",
-        "    ensemble stays together);",
-        "  - independent counterpoint inside the chorale — inner voices and bass",
-        "    with their own rhythm and contour, every vertical a real chord;",
-        "  - technically demanding passages — fast runs, wide leaps, the",
-        "    extremes of the range — built on the chords, never against them;",
-        "  - a full dynamic map from pp to ff with hairpins and accents marked;",
+        "These are professional orchestral players, and the piece has to be worth",
+        "their rehearsal time — through musicianship, not busyness. It MUST contain:",
+        "  - harmonic motion in the orchestral tradition: secondary dominants,",
+        "    borrowed chords, diminished sevenths and real modulations, every one",
+        "    named in the chord grid — triads and seventh chords, never jazz",
+        "    extensions;",
+        "  - rhythmic life: dotted rhythms, syncopation, hemiola (the meter itself",
+        "    stays fixed, so a large ensemble stays together);",
+        "  - long, singing phrases and a texture that keeps changing — tutti, solo,",
+        "    a theme passed between families, colour from the winds;",
+        "  - the full range of the instruments and a full dynamic map from pp to ff;",
         "  - development of the theme, not repetition of it.",
-        "Even, four-square diatonic writing is a FAILED response at this level,",
-        "however clean it is.",
+        "Fast notes are an occasional flourish or a run into a climax, never a",
+        "texture: an orchestra's power is its sustained, blended sound.",
     ],
 }
 
@@ -395,9 +393,13 @@ def build_user_prompt(request: dict, roster: list, length: str = None) -> str:
         "  articulation and harmony so that a listener would name this mood",
         "  without being told it.",
         "",
-        length or f"LENGTH: {measures} measures in total, built from a few phrases.",
+        choices.length_line(request) or length
+        or f"LENGTH: {measures} measures in total, built from a few phrases.",
         "",
     ]
+    fixed = choices.choice_lines(request)
+    if fixed:
+        lines += [*fixed, ""]
 
     if conductor:
         lines += [
@@ -1057,6 +1059,37 @@ def revise(score: dict, request: dict, instruction: str) -> dict:
 # another bar of four-voice chorale in the one call that cannot be parallelised
 # — so it was capped at 16 to 32 bars. Now a long piece costs about what a short
 # one did, and the model's attention goes on the bars that are actually new.
+# The melodic vocabulary of each mood: what its lines are made of.
+MOOD_GESTURES = {
+    "happy": "skipping thirds, bright arpeggios, dotted rhythms, a rising sixth",
+    "joyful": "fanfare fourths and fifths, repeated-note calls, broad arpeggios, a trill "
+              "at the peak",
+    "playful": "staccato leaps, grace notes, surprising rests, a turn figure tossed "
+               "between parts",
+    "peaceful": "stepwise lines in the scale, long notes, gentle leaps of a third or "
+                "fourth, suspensions",
+    "hopeful": "a rising fourth answered by steps, phrases that climb in register, upward "
+               "resolutions",
+    "nostalgic": "a simple stepwise tune, a falling sixth, a gently dotted rhythm, one "
+                 "chromatic note as colour",
+    "romantic": "a long arch, an expressive leap of a sixth or seventh resolving by step, "
+                "appoggiaturas, a turn",
+    "sad": "falling steps, sighing two-note slurs, a drooping minor sixth, long notes",
+    "longing": "a leap up that falls back by step, unresolved phrase endings, a wide "
+               "expressive interval",
+    "mysterious": "modal lines, whole-tone steps, wide still intervals, held notes with "
+                  "silences",
+    "tense": "a short ostinato cell, repeated notes, a tritone, accents off the beat",
+    "angry": "hammered repeated notes, jagged leaps, short accented motifs, octave drops",
+    "dark": "low slow steps, a falling fourth, half-step sighs in the bass, held tones",
+    "epic": "fanfare fifths and octaves, dotted rhythms, broad leaps, a sustained peak",
+    "dreamy": "floating arpeggios, stepwise drifts in the upper register, ties across the "
+              "beat",
+    "energetic": "driving repeated notes, short motifs traded between parts, syncopation, "
+                 "arpeggio bursts",
+}
+
+
 # How long a wind or brass player, or a singer, can go without a breath.
 BREATH_BARS = 6
 
@@ -1134,6 +1167,11 @@ def _plan_prompt(request: dict, roster: list) -> str:
     """Ask for the piece itself — its ideas and its form, not the staves."""
     level = request["level"]
     total, unique = LENGTHS[level]
+    target = choices.length_target(request)
+    if target and target[0] == "bars":
+        total, unique = str(target[1]), f"about {max(8, round(target[1] * 0.4))}"
+    elif target:
+        total, unique = "the length given above in", "about 40% of those"
     return "\n".join([
         build_user_prompt(request, roster),
         "",
@@ -1168,10 +1206,15 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "    dominant); the last section of the form is a phrase at home",
         "    (transpose 0) ending on a full cadence.",
         "",
-        "HARMONY THAT GOES SOMEWHERE. A chord grid that sits on I, IV and V is",
-        "what makes a piece sound generated. Use inversions, at least one",
-        "secondary dominant, a suspension or two that resolve. Each chord should",
-        "sound like it was going to follow the one before it.",
+        *rag.guidance(roster, "harmony chord distribution doubling combined groups "
+                              "balance", limit=2),
+        "",
+        "HARMONY THAT GOES SOMEWHERE, IN THE ORCHESTRA'S LANGUAGE. Triads and",
+        "seventh chords — I, IV, V, ii, vi, V7, secondary dominants, diminished",
+        "sevenths, inversions, a suspension or two that resolve. Most bars are plain",
+        "triads. No jazz chords: no 9ths, 11ths, 13ths, 6/9 or added notes (they are",
+        "reduced to their triad or seventh anyway). Each chord should sound like it",
+        "was going to follow the one before it.",
         "",
         *HARMONIC_RHYTHM,
         "",
@@ -1384,7 +1427,8 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
                       {"role": "user", "content": _plan_prompt(request, roster)}],
             response_format={"type": "json_schema",
                              "json_schema": {"name": "plan", "strict": True,
-                                             "schema": PLAN_SCHEMA}},
+                                             "schema": choices.constrain(PLAN_SCHEMA,
+                                                                         request)}},
             temperature=0.8,
             max_tokens=PLAN_TOKENS,
             reasoning_effort=PLAN_EFFORT,
@@ -1404,6 +1448,9 @@ def _plan(request: dict, roster: list, model: str, deadline: float = None,
     if not request["conductor"]:
         plan["conductor"] = None
     _tidy_labels(plan)
+    # Triads and sevenths only: see form.orchestral_chord.
+    for phrase in plan.get("phrases") or []:
+        phrase["chords"] = [form.orchestral_chord(c) for c in phrase.get("chords") or []]
     _modulate_light(plan)
     _close_light(plan)
 
@@ -1569,27 +1616,25 @@ def _form_lines(plan: dict) -> list:
     return lines
 
 
-# How much of the writing has to be hard, not just whether it may be. Told only
-# what is allowed, the model writes a modest line and calls it advanced; asked
-# for amounts, it writes to them. Calibrated against conservatory audition
-# repertoire: a Kreutzer étude is mostly running sixteenths, a Paganini caprice
-# more so.
+# What the level looks like where a part is featured — its tune, a solo, a
+# counter-melody. It used to be a quota every part had to meet in every
+# section, which filled the accompaniment with showy passagework and made the
+# texture cluttered. Accompaniment stays clear at any level; the level shows in
+# the lines that lead, when the music calls for it.
 DIFFICULTY_QUOTA = {
     "higher-intermediate": [
-        "at least half the bars of every section move in sixteenths or faster;",
-        "in every section, one run or arpeggio spanning at least an octave and a half;",
-        "the climax of each section in the upper third of the full range;",
-        "strings: double stops in at least a fifth of the bars.",
+        "the climax high in the range, reached and held with control;",
+        "an expressive leap or two of a sixth or more;",
+        "strings: double stops for warmth at cadences; winds and brass: a soft sustained "
+        "note high in the range.",
     ],
     "pro": [
-        "at least two thirds of the bars of every section move in sixteenths, sextuplets "
-        "or thirty-seconds;",
-        "in every section, at least two runs or arpeggios spanning two octaves or more;",
-        "the climax of each section within a third of the top of the full range, reached "
-        "by leap or run;",
-        "strings: double stops in thirds, sixths or octaves in at least a quarter of the "
-        "bars, and a three- or four-note chord at section ends;",
-        "winds and brass: rapid tongued and slurred passagework across the whole range.",
+        "the extremes of the range used musically — the top at the climax, the low "
+        "register for colour;",
+        "the instrument's techniques where the music calls for them: double and triple "
+        "stops, harmonics, trills, wide slurred leaps, a pianissimo at the top;",
+        "long, breathing phrases — the difficulty is control, range and technique, "
+        "never speed.",
     ],
 }
 
@@ -1605,9 +1650,9 @@ def _variation(number: int, role: str, level: str) -> str:
     if number == 2:
         return ("SECOND HEARING: vary it — rhythmic diminution around the guide notes, "
                 "ornaments, part of it in another octave. It must not sound copied.")
-    return (f"HEARING {number}: transform it — the most elaborate figuration your level "
-            "allows around the guide notes, octave displacement, the climax at the top "
-            "of the range. A listener should hear the theme, but newly.")
+    return (f"HEARING {number}: transform it — a new register, octave displacement, the "
+            "techniques your level allows (double stops, harmonics, ornaments), the "
+            "climax at the top of the range. A listener should hear the theme, but newly.")
 
 
 def _section_prompt(plan: dict, request: dict, roster: list, part: dict,
@@ -1642,11 +1687,14 @@ def _section_prompt(plan: dict, request: dict, roster: list, part: dict,
         lines.append(f"TECHNIQUE THIS PLAYER MUST BE GIVEN: {technique}")
     if part["pitched"]:
         lines += ["SHOW HOW TO PLAY IT — this part will be performed from the page:",
-                  *HOW_TO_PLAY.get(family, []), *READABLE_RHYTHM]
+                  *HOW_TO_PLAY.get(family, []), *READABLE_RHYTHM,
+                  f"FIGURES THAT FIT THE MOOD: {MOOD_GESTURES.get(request['mood'], '')}. "
+                  "No chromatic runs (notes a semitone apart, all one way)."]
     quota = DIFFICULTY_QUOTA.get(request["level"])
     if quota and part["pitched"]:
-        lines += ["MINIMUM DIFFICULTY — count it in what you return; falling short is a",
-                  "failed part, however musical:", *[f"  * {q}" for q in quota]]
+        lines += ["WHERE YOU HAVE THE TUNE OR A FEATURED LINE, write to the level "
+                  "(accompaniment stays clear and simple at any level):",
+                  *[f"  * {q}" for q in quota]]
     lines.append("")
 
     for index in indexes:

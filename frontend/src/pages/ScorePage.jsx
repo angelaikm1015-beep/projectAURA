@@ -118,6 +118,7 @@ export default function ScorePage() {
   return (
     <ScoreView
       score={saved.score}
+      scoreId={saved.id}
       brief={describeBrief(options, saved.brief)}
       visibility={saved.visibility}
       caption={saved.caption}

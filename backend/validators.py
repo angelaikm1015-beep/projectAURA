@@ -8,6 +8,7 @@ decide whether an account is created.
 import re
 from datetime import date
 
+import choices
 import options
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$")
@@ -188,7 +189,9 @@ def validate_composition(data: dict) -> dict:
         notes_error = None
 
     return _compact({
-        "instruments": validate_instruments(data.get("instruments")),
+        # "Let GPT choose" sends no instruments, only the orchestra's size.
+        "instruments": None if choices.auto_instruments(data)
+                       else validate_instruments(data.get("instruments")),
         "ensembleGroup": _validate_choice(
             data.get("ensembleGroup"), options.ENSEMBLE_GROUP_VALUES,
             "Select who is playing."),
@@ -202,4 +205,5 @@ def validate_composition(data: dict) -> dict:
         # Optional: a request that doesn't say is a light one.
         "mode": None if data.get("mode", "light") in COMPOSE_MODES
                 else "Choose light or deep composing.",
+        **choices.validate(data),
     })
