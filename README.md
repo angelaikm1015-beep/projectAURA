@@ -424,6 +424,17 @@ examples, which the corpus can't carry, are dropped from the text. Set
 
 ### Playback
 
+**Following along.** While a piece plays, the bar being heard is tinted on the
+sheet across the whole system, every instrument at once. A line moves through
+it in time with the sound, and the page scrolls to each new system as the
+music reaches it. The position is read from the audio clock on every animation
+frame (`position()` in `usePlayer`), so it stays in step and slows with the
+closing ritardando. The bar's extent comes from the `abcjs-mm<n>` class abcjs
+puts on every note and rest it draws (`usePlayhead` in
+[score-view.jsx](frontend/src/components/score-view.jsx)). The form timeline
+above the sheet shows the section and bar number, and clicking a section
+plays from there.
+
 [orchestra.js](frontend/src/lib/orchestra.js) plays every note from recordings
 of real instruments rather than a General MIDI soundfont. abcjs still reads the
 ABC into notes, with pitch, timing and dynamics. Each note is then played from
@@ -512,16 +523,24 @@ finished. The user gets the music and is told to check the alignment.
 
 ### Choosing a model
 
-This matters more than anything else in the pipeline. Same prompt, same request:
+This matters more than anything else in the pipeline. Early on, with the same
+prompt and request, `gpt-4o` produced 34 malformed bars across 3 parts where
+`gpt-5.5` was clean on the first pass. Later, on one 15-part brief, the mean
+number of distinct pitches per part (the closest cheap measure of "written
+rather than generated") was:
 
-| Model | Result |
+| Model | Distinct pitches per part |
 | --- | --- |
-| `gpt-4o` | 34 malformed bars across 3 parts; needed the repair round |
-| `gpt-5.5` | Clean on the first pass — every bar correct, no repair needed |
+| `gpt-6.1-sol` | 65.6 |
+| `gpt-5.6-sol` | 55.7 |
+| `gpt-6-astra` | 55.5 |
+| `gpt-6-sol` | 41.3 |
+| `gpt-6-luna` | 26.6, and dynamics on only 5 parts of 15 |
 
-`gpt-5.5` is the default for that reason. `gpt-4o` is much cheaper and still
-works — the validator catches its mistakes and the repair round fixes most of
-them — but expect the extra round most of the time. Set `OPENAI_MODEL` to choose.
+The code's default is `gpt-6.1-sol` (`DEFAULT_MODEL` in
+[composer.py](backend/composer.py)). `OPENAI_MODEL` in `backend/.env`
+overrides it for every call in both modes. Each saved piece records the model
+that wrote it, in its `model` field.
 
 Because the model is configurable and model families disagree about `max_tokens`
 and `temperature`, an unsupported parameter is detected from OpenAI's own 400,

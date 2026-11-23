@@ -123,9 +123,104 @@ function stripRepeatedNames(tune) {
   }
 }
 
+/*
+ * Following the music on the page. While the piece plays, the bar being heard
+ * is tinted across the whole system — every instrument at once — and a line
+ * moves through it in time with the sound, so a reader always knows where the
+ * music is. When the music reaches the next system the page scrolls to it.
+ *
+ * abcjs tags every note and rest it draws with its bar (abcjs-mm0 is bar 1),
+ * so the bar's extent is the union of its notes' boxes. Position comes from
+ * the player's audio clock on every animation frame, so the line moves
+ * smoothly and slows with the ritardando at the end.
+ */
+const SVG_NS = "http://www.w3.org/2000/svg";
+const BAR_PADDING = 7;
+
+function barBox(host, index, cache) {
+  if (cache.has(index)) return cache.get(index);
+  const elements = [...host.querySelectorAll(`.abcjs-mm${index}`)]
+    .filter((el) => el.ownerSVGElement && typeof el.getBBox === "function");
+  let box = null;
+  if (elements.length) {
+    const svg = elements[0].ownerSVGElement;
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const el of elements) {
+      if (el.ownerSVGElement !== svg) continue;
+      const b = el.getBBox();
+      if (!b.width && !b.height) continue;
+      x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y);
+      x2 = Math.max(x2, b.x + b.width); y2 = Math.max(y2, b.y + b.height);
+    }
+    if (x1 < x2) {
+      box = { svg, x: x1 - BAR_PADDING, y: y1 - BAR_PADDING,
+              width: x2 - x1 + 2 * BAR_PADDING, height: y2 - y1 + 2 * BAR_PADDING };
+    }
+  }
+  cache.set(index, box);
+  return box;
+}
+
+function usePlayhead(host, player, abc, size) {
+  const state = player?.state;
+  // The player hands out a fresh function each render; the animation reads the
+  // latest one through a ref rather than restarting five times a second.
+  const positionRef = useRef(null);
+  positionRef.current = player?.position;
+  useEffect(() => {
+    const node = host.current;
+    if (!node || state !== "playing") return undefined;
+    const cache = new Map();
+    const bar = document.createElementNS(SVG_NS, "rect");
+    bar.setAttribute("class", "sheet-playhead__bar");
+    bar.setAttribute("rx", "6");
+    const line = document.createElementNS(SVG_NS, "line");
+    line.setAttribute("class", "sheet-playhead__line");
+    let svgShown = null;
+    let frame = 0;
+
+    const draw = () => {
+      frame = requestAnimationFrame(draw);
+      const at = positionRef.current?.();
+      if (at == null) return;
+      const index = Math.floor(at);
+      const box = barBox(node, index, cache);
+      if (!box) return;
+      if (bar.ownerSVGElement !== box.svg) {
+        box.svg.insertBefore(bar, box.svg.firstChild);   // behind the notes
+        box.svg.appendChild(line);                        // in front of them
+      }
+      bar.setAttribute("x", box.x);
+      bar.setAttribute("y", box.y);
+      bar.setAttribute("width", box.width);
+      bar.setAttribute("height", box.height);
+      const x = box.x + BAR_PADDING + (box.width - 2 * BAR_PADDING) * (at - index);
+      line.setAttribute("x1", x);
+      line.setAttribute("x2", x);
+      line.setAttribute("y1", box.y);
+      line.setAttribute("y2", box.y + box.height);
+      // A new system: bring it into view if it isn't already.
+      if (box.svg !== svgShown) {
+        svgShown = box.svg;
+        const rect = box.svg.getBoundingClientRect();
+        if (rect.top < 80 || rect.bottom > window.innerHeight - 40) {
+          box.svg.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }
+    };
+    frame = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(frame);
+      bar.remove();
+      line.remove();
+    };
+  }, [host, state, abc, size]);
+}
+
 /** One engraved sheet. Re-renders whenever the ABC or the chosen size changes. */
-function Sheet({ abc, size, nameEveryLine = true, onTune }) {
+function Sheet({ abc, size, nameEveryLine = true, onTune, player }) {
   const host = useRef(null);
+  usePlayhead(host, player, abc, size);
 
   useEffect(() => {
     const node = host.current;
@@ -329,7 +424,17 @@ function usePlayer(tune, abc, parts) {
     playFrom(timing ? timing.toSeconds(number - 1) : ((number - 1) * msPerMeasure) / 1000);
   }
 
-  return { state, supported, toggle, muted, setMix, measure, playFromMeasure };
+  /** Where the sound is now, in bars from the start (2.5 = halfway through bar 3),
+   *  read straight from the audio clock; null when nothing is playing. */
+  function position() {
+    const clock = clockRef.current;
+    if (!clock) return null;
+    const seconds = clock.context.currentTime - clock.startedAt;
+    if (seconds < 0) return 0;
+    return clock.timing.toBars(Math.min(seconds, clock.duration));
+  }
+
+  return { state, supported, toggle, muted, setMix, measure, playFromMeasure, position };
 }
 
 /*
@@ -1072,6 +1177,7 @@ export function ScoreView({
             size={size}
             nameEveryLine={active.nameEveryLine}
             onTune={setTune}
+            player={player}
           />
         </div>
 

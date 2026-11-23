@@ -2338,3 +2338,23 @@ body:has(.score-shell) {
 .chips--large .chip:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -1px; }
 
 .section-title__note { font-weight: 400; color: var(--text-faint); }
+
+/* ---------- following the music on the sheet ---------- */
+
+.sheet svg rect.sheet-playhead__bar {
+  fill: var(--accent-soft);
+  stroke: rgba(85, 99, 47, 0.35);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.sheet svg line.sheet-playhead__line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+@media print {
+  .sheet-playhead__bar, .sheet-playhead__line { display: none; }
+}
