@@ -493,6 +493,8 @@ def _compose_in_background(app: Flask, request_id: str, uid: str, owner_name: st
         app.logger.exception("Deep compose failed")
         progress.finish(request_id, error="Something went wrong on our end.")
         return
+    # Where the time went, one line a piece, like the reference project's.
+    app.logger.info("Deep piece done: %s", score.get("timings"))
     try:
         score_id = library.save(uid, owner_name, score, brief)
     except Exception:                                   # noqa: BLE001

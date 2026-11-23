@@ -299,6 +299,17 @@ The compose page offers two modes.
   Editing a piece with "ask for a change" rewrites its ABC directly, so an
   edited piece no longer offers MusicXML.
 
+**What runs when.** As in the reference project, the chain is only three steps
+deep: the plan, then one round of calls at once, then engraving. After the plan,
+every passage of the score, every solo and a short "notes" call (programme
+note, rehearsal tips, conductor's notes) all run together. A solo section's
+passage drafts the solo's support and joins, and the solo call's line replaces
+the draft when the score is engraved. A failed solo call therefore still leaves
+music there, and nothing waits for a solo. The plan carries only what decides
+the notes. Solos run at medium effort and are rewritten only when the melody
+checker finds two or more faults. Each finished piece logs, and stores, where
+its time went (`timings`: plan, score, engrave, total).
+
 Deep mode takes about 5–15 minutes, depending on ensemble size and level. That
 is longer than a proxy or browser will hold a request open, so `POST
 /api/compose` with `"mode": "deep"` answers `202` immediately and runs the piece

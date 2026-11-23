@@ -803,6 +803,9 @@ def deep_answer(**kwargs):
     deep_prompts.append((name, prompt, kwargs["messages"][0]["content"]))
     if name == "deep_plan":
         return FakeCompletion(deep_plan_now[0])
+    if name == "notes":
+        return FakeCompletion({"programNote": "A test.", "rehearsalTips": "Count.",
+                               "conductor": None})
     if name == "solo":
         soloist = re.search(r"WRITE THE SOLO for .*? \[(P\d)\]", prompt)[1]
         bars = int(re.search(r"EXACTLY (\d+) measures", prompt)[1])
@@ -832,8 +835,14 @@ with mock.patch.object(composer, "client", return_value=deep_client):
     deep_score = deep.compose(deep_request)
 
 # 20 + 16 bars don't fit one 32-bar passage: two passages, the coda with the B section.
-check("deep: one plan, then one call per passage for the whole orchestra",
-      deep_calls == ["deep_plan", "passage", "passage"], deep_calls)
+check("deep: one plan, then at once one call per passage for the whole orchestra, and the notes",
+      deep_calls[0] == "deep_plan" and sorted(deep_calls[1:]) == ["notes", "passage", "passage"],
+      deep_calls)
+check("  the words around the music come from their own quick call, not the plan",
+      deep_score["programNote"] == "A test." and deep_score["rehearsalTips"] == "Count."
+      and "programNote" not in deep.PLAN_SCHEMA["properties"]
+      and "timings" in deep_score and deep_score["timings"]["passages"] == 2,
+      (deep_score.get("programNote"), deep_score.get("timings")))
 passage_prompt = next(p for n, p, _ in deep_prompts if n == "passage" and ">> s1 " in p)
 system_prompt = next(s for n, _, s in deep_prompts if n == "passage")
 check("deep: a passage call writes every instrument together",
@@ -898,17 +907,18 @@ deep_plan_now[0] = {**DEEP_PLAN, "sections": [
 deep_calls.clear(); deep_prompts.clear()
 with mock.patch.object(composer, "client", return_value=deep_client):
     solo_score = deep.compose(deep_request)
-check("deep: a solo is composed on its own before the score, and sent back once for its faults",
-      deep_calls[:3] == ["deep_plan", "solo", "solo"] and deep_calls.count("passage") >= 1
-      and "WHAT IS WRONG WITH IT" in deep_prompts[2][1]
-      and "Awkward leaps" in deep_prompts[2][1], deep_calls)
-solo_prompt = deep_prompts[1][1]
+solo_prompts = [p for n, p, _ in deep_prompts if n == "solo"]
+rewrite = next((p for p in solo_prompts if "WHAT IS WRONG WITH IT" in p), "")
+check("deep: a solo is composed on its own, alongside the score, and sent back once for its faults",
+      deep_calls[0] == "deep_plan" and deep_calls.count("solo") == 2
+      and deep_calls.count("passage") >= 1 and "Awkward leaps" in rewrite, deep_calls)
+solo_prompt = next(p for p in solo_prompts if "YOUR FIRST VERSION" not in p)
 check("  with the melodic rules, the soloist's singing register and Berlioz on its voice",
       "WRITING THE SOLO" in solo_prompt and "singing register" in solo_prompt
       and ("[Berlioz, " in solo_prompt or not rag.CORPUS.exists()))
 solo_passage = next(p for n, p, _ in deep_prompts if n == "passage" and ">> s2 " in p)
-check("  the passage writer leads into it and writes R there",
-      "ALREADY WRITTEN — this section is a SOLO" in solo_passage)
+check("  the passage writer drafts the support and the joins; the solo call's line replaces it",
+      "will replace yours here" in solo_passage)
 solo_parts = {p["partId"]: p for p in solo_score["compact"]["parts"]}
 check("  and the rewritten solo is in the score, with the others resting under it",
       "@p E5:4( D5:4 C5:4 D5:4)" in solo_parts["P4"]["upper"][8]

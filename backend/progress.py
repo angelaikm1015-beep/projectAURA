@@ -62,14 +62,15 @@ MODES = {
     "light": {"order": STAGE_ORDER, "weights": STAGE_WEIGHTS, "seconds": STAGE_SECONDS,
               "labels": STAGE_LABELS},
     "deep": {
-        "order": ["planning", "solos", "writing", "engraving"],
-        "weights": {"planning": 0.16, "solos": 0.14, "writing": 0.67, "engraving": 0.03},
-        "seconds": {"planning": 240, "solos": 180, "writing": 240, "engraving": 2},
+        # Shares of the time, not of the calls: the plan is one long call, and
+        # everything after it runs at once, so the two take about as long.
+        "order": ["planning", "writing", "engraving"],
+        "weights": {"planning": 0.45, "writing": 0.52, "engraving": 0.03},
+        "seconds": {"planning": 240, "writing": 240, "engraving": 2},
         "labels": {**STAGE_LABELS,
                    "planning": "Composing the themes, the form and every bar's harmony",
-                   "solos": "Composing the solos, each on its own",
-                   "writing": "Writing the full score — every instrument together, "
-                              "passage by passage"},
+                   "writing": "Writing the full score and the solos — every passage at "
+                              "once"},
     },
 }
 

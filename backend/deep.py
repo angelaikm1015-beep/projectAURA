@@ -38,6 +38,7 @@ import math
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fractions import Fraction
 
@@ -59,6 +60,10 @@ _log = logging.getLogger(__name__)
 
 PLAN_EFFORT = os.environ.get("DEEP_PLAN_EFFORT", "high")
 WRITE_EFFORT = os.environ.get("DEEP_WRITE_EFFORT", "medium")
+# A solo is a few bars for one instrument with clear rules and a checker behind
+# it: it doesn't need the plan's thinking time.
+SOLO_EFFORT = os.environ.get("DEEP_SOLO_EFFORT", "medium")
+SOLO_REWRITE_FAULTS = 2   # a solo goes back only if the checker finds this many
 CALL_TIMEOUT = float(os.environ.get("DEEP_CALL_TIMEOUT", "900"))
 CONCURRENCY = int(os.environ.get("DEEP_CONCURRENCY", "8"))
 MAX_TOKENS = composer.MAX_OUTPUT_TOKENS
@@ -143,6 +148,11 @@ PLAN_SCHEMA = _obj({
         "partId": {"type": "string"},
         "role": {"type": "string", "description": "One sentence for the player."},
     })},
+})
+
+# The words around the music — written by a quick call of its own, alongside
+# the score, so the plan's thinking time goes only on what decides the notes.
+NOTES_SCHEMA = _obj({
     "programNote": {"type": "string", "description": "2-4 sentences for the players."},
     "rehearsalTips": {"type": "string", "description": "2-3 sentences."},
     "conductor": composer.CONDUCTOR_SCHEMA,
@@ -297,9 +307,6 @@ def _plan_prompt(request: dict, roster: list) -> str:
         "    together, everyone else resting.",
         "",
         "partRoles: one entry per player — what they do across the piece.",
-        "programNote, rehearsalTips: short. conductor: "
-        + ("fill it in with real measure numbers and player names."
-           if request["conductor"] else "null."),
         "",
         *rag.guidance(roster, "composition of the orchestra full tutti balance harmony "
                               "doubling melody combined groups", limit=3,
@@ -379,10 +386,34 @@ def _plan(request: dict, roster: list, model: str) -> dict:
                         for s in sections]
     plan["harmony"] = [{"measure": s["start"] + i, "chord": chord}
                        for s in sections for i, chord in enumerate(s["chords"])]
-    if not request["conductor"]:
-        plan["conductor"] = None
-    composer._tidy_conductor(plan)
     return plan
+
+
+def _notes_prompt(plan: dict, request: dict, roster: list) -> str:
+    mood = options.MOODS_BY_VALUE[request["mood"]]
+    level = options.LEVELS_BY_VALUE[request["level"]]
+    lines = [
+        f"Write the notes that go with \"{plan['title']}\": {plan['concertKey']}, "
+        f"{plan['timeSignature']}, {plan['tempoText']} ({plan['tempoBpm']} bpm), "
+        f"{plan['measureCount']} measures, for {level['label']}-level players. "
+        f"Mood: {mood['label']}.",
+        "The players: " + ", ".join(f"[{p['partId']}] {p['label']}" for p in roster),
+        "",
+        *_form_lines(plan, roster, []),
+        "",
+        "programNote: 2-4 sentences for the players on what the piece is and how it goes.",
+        "rehearsalTips: 2-3 sentences on what to rehearse, naming measures and parts.",
+        "conductor: " + ("fill it in — real measure numbers from the form above and the "
+                         "players' names." if request["conductor"] else "null."),
+    ]
+    return "\n".join(lines)
+
+
+def _write_notes(plan: dict, request: dict, roster: list, model: str) -> dict:
+    effort = "medium" if request["conductor"] else "low"
+    reply, _ = _asked("notes", _notes_prompt(plan, request, roster), NOTES_SCHEMA, effort,
+                      model)
+    return reply or {}
 
 
 def _passages(plan: dict, limit: int = PASSAGE_BARS) -> list:
@@ -513,18 +544,18 @@ def _compose_solo(plan: dict, request: dict, roster: list, index: int, model: st
     beat = form.beat_units(plan["timeSignature"])
     prompt = _solo_prompt(plan, request, roster, index)
     schema = solo_schema(roster)
-    reply, _ = _asked("solo", prompt, schema, PLAN_EFFORT, model)
+    reply, _ = _asked("solo", prompt, schema, SOLO_EFFORT, model)
     music = _solo_music(reply, s, soloist["partId"])
     if not music:
         return {}
     first = features.solo_faults(soloist, music[soloist["partId"]], s, units, beat)
-    if first:
+    if len(first) >= SOLO_REWRITE_FAULTS:
         shown = "\n".join(f"  [{pid}] " + " | ".join(w["measures"]) for pid, w in music.items())
         again, _ = _asked("solo", "\n".join([
             prompt, "", "YOUR FIRST VERSION:", shown, "", "WHAT IS WRONG WITH IT:",
             *[f"  - {fault}" for fault in first], "",
             "Write the solo again, fixing all of these and keeping what was good about it."]),
-            schema, PLAN_EFFORT, model)
+            schema, SOLO_EFFORT, model)
         revised = _solo_music(again, s, soloist["partId"])
         if revised and len(features.solo_faults(soloist, revised[soloist["partId"]], s,
                                                 units, beat)) <= len(first):
@@ -601,17 +632,12 @@ def _section_lines(plan: dict, roster: list, index: int) -> list:
         f"  orchestration: {s['orchestration']}",
         "  harmony: " + " | ".join(f"{s['start'] + i} {c}" for i, c in enumerate(s["chords"])),
     ]
-    if s.get("solo_music"):
-        lines += [f"  ALREADY WRITTEN — this section is a SOLO for {lead}, composed separately. "
-                  "Write every measure of every part here as R; it is filled in afterwards.",
-                  "  Lead into it and out of it: the bars before hand over to its first note "
-                  "and harmony, the bars after pick up from where it ends. It goes:"]
-        for pid, written in s["solo_music"].items():
-            if any(m.strip() != "R" for m in written["measures"]):
-                lines.append(f"    [{pid}] " + " | ".join(written["measures"]))
-    elif s["texture"] == "solo":
-        lines.append(f"  SOLO: {lead} sings alone; one to three others hold soft (pp–p) "
-                     "notes below it, changing only with the harmony; everyone else R.")
+    if s["texture"] == "solo":
+        lines += [f"  SOLO: {lead} sings alone; one to three others hold soft (pp–p) notes "
+                  "below it, changing only with the harmony; everyone else R.",
+                  "  The solo line is also being composed on its own and will replace yours "
+                  "here — so make this section's support and its joins right: hand over to "
+                  "the solo's key and first chord, and pick up from its last."]
     if s.get("theme"):
         part = by_id[s["lead"]]
         theme = features.theme_for(s, part)
@@ -883,9 +909,11 @@ def estimate_seconds(part_count: int, level: str = None) -> dict:
     waves = math.ceil(passages / CONCURRENCY)
     # The plan, then every passage at once: each is one call for the whole
     # orchestra, longer the more players it writes for.
+    # The plan, then one round of calls at once — the passages, the solos (a
+    # rewrite sometimes doubles one) and the notes; the slowest sets the pace.
     per_passage = PASSAGE_SECONDS + PASSAGE_SECONDS_PER_PART * max(1, part_count)
-    solo = SOLO_SECONDS * 1.4 if part_count >= 2 else 0     # one wave, sometimes a rewrite
-    typical = PLAN_SECONDS + solo + waves * per_passage * 1.2
+    solo = SOLO_SECONDS * 1.5 if part_count >= 2 else 0
+    typical = PLAN_SECONDS + max(waves * per_passage, solo) * 1.2
     return {"lowSeconds": int(typical * 0.6), "highSeconds": int(typical * 1.7),
             "typicalSeconds": int(typical)}
 
@@ -899,49 +927,57 @@ def compose(request: dict, report=None) -> dict:
     model = os.environ.get("OPENAI_MODEL", composer.DEFAULT_MODEL)
     level = request["level"]
 
+    started = time.monotonic()
+    timings = {}
     if report:
         report("planning", 0, 1)
     plan = _plan(request, roster, model)
+    timings["plan"] = round(time.monotonic() - started)
     if report:
         report("planning", 1, 1)
 
+    # Everything after the plan at once: every passage of the score, every solo,
+    # and the notes. A solo's passage drafts it too, so nothing waits for it;
+    # the solo call's version replaces the draft when the score is engraved.
     solos = [i for i, s in enumerate(plan["_sections"]) if s["texture"] == "solo" and s["lead"]]
-    if solos:
-        if report:
-            report("solos", 0, len(solos))
-        with ThreadPoolExecutor(max_workers=min(CONCURRENCY, len(solos))) as pool:
-            futures = {pool.submit(_compose_solo, plan, request, roster, i, model): i
-                       for i in solos}
-            for done_count, future in enumerate(as_completed(futures), 1):
+    passages = _passages(plan)
+    _log.info("Deep: %d measures in %d passages for %d parts; %d solos; main theme in %d "
+              "sections", plan["measureCount"], len(passages), len(roster), len(solos),
+              sum(1 for s in plan["_sections"] if s.get("theme")))
+    total = len(passages) + len(solos) + 1
+    if report:
+        report("writing", 0, total)
+    texts, errors, notes, finished = {}, [], {}, 0
+    with ThreadPoolExecutor(max_workers=total) as pool:
+        jobs = {pool.submit(_write_passage, plan, request, roster, run, model): ("passage", run)
+                for run in passages}
+        jobs.update({pool.submit(_compose_solo, plan, request, roster, i, model): ("solo", i)
+                     for i in solos})
+        jobs[pool.submit(_write_notes, plan, request, roster, model)] = ("notes", None)
+        for future in as_completed(jobs):
+            kind, what = jobs[future]
+            if kind == "passage":
+                written, error = future.result()
+                texts.update(written)
+                if error:
+                    errors.append(error)
+            elif kind == "solo":
                 music = future.result()
                 if music:
-                    plan["_sections"][futures[future]]["solo_music"] = music
-                if report:
-                    report("solos", done_count, len(solos))
-
-    passages = _passages(plan)
-    _log.info("Deep: %d measures in %d passages, each one call for all %d parts; %d solos, "
-              "main theme in %d sections", plan["measureCount"], len(passages), len(roster),
-              len(solos), sum(1 for s in plan["_sections"] if s.get("theme")))
-    lock, done = threading.Lock(), [0]
-    if report:
-        report("writing", 0, len(passages))
-    texts, errors = {}, []
-    with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-        futures = [pool.submit(_write_passage, plan, request, roster, run, model)
-                   for run in passages]
-        for future in as_completed(futures):
-            written, error = future.result()
-            texts.update(written)
-            if error:
-                errors.append(error)
-            with lock:
-                done[0] += 1
-                if report:
-                    report("writing", done[0], len(passages))
+                    plan["_sections"][what]["solo_music"] = music
+            else:
+                notes = future.result()
+            finished += 1
+            if report:
+                report("writing", finished, total)
+    timings["score"] = round(time.monotonic() - started) - timings["plan"]
     if not texts:
         raise errors[0] if errors else ComposerError("Nothing could be written this time. "
                                                      "Please try again.")
+    plan["programNote"] = str(notes.get("programNote") or "")
+    plan["rehearsalTips"] = str(notes.get("rehearsalTips") or "")
+    plan["conductor"] = notes.get("conductor") if request["conductor"] else None
+    composer._tidy_conductor(plan)
 
     if report:
         report("engraving", 0, 1)
@@ -971,4 +1007,7 @@ def compose(request: dict, report=None) -> dict:
         "parts": stored,
     }
     result["repairs"] = repairs
+    timings["total"] = round(time.monotonic() - started)
+    timings["engrave"] = timings["total"] - timings["plan"] - timings["score"]
+    result["timings"] = {**timings, "passages": len(passages), "solos": len(solos)}
     return result
